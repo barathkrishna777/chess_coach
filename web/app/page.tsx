@@ -186,7 +186,10 @@ export default function Home() {
       const response = await fetch(EXPLAIN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ move: selectedMove }),
+        body: JSON.stringify({
+          move: selectedMove,
+          actual_line: actualLineFromSelection(game.moves, selectedIndex),
+        }),
       });
       const body: unknown = await response.json();
       if (!response.ok) {
@@ -594,6 +597,17 @@ function errorMessage(body: unknown, status: number): string {
     return body.error.message;
   }
   return `Analysis failed with HTTP ${status}.`;
+}
+
+function actualLineFromSelection(
+  moves: AnnotatedMove[],
+  selectedIndex: number,
+): EngineMove[] {
+  if (selectedIndex < 0) return [];
+  return moves.slice(selectedIndex, selectedIndex + 6).map((move) => ({
+    uci: move.uci,
+    san: move.san,
+  }));
 }
 
 function isApiErrorEnvelope(value: unknown): value is ApiErrorEnvelope {

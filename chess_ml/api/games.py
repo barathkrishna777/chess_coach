@@ -26,7 +26,7 @@ from chess_ml.engine.stockfish import (
     StockfishProtocolError,
     StockfishUnavailableError,
 )
-from chess_ml.explanation.models import ExplanationRequest, MoveExplanation
+from chess_ml.explanation.models import ExplanationRequest, LineMove, MoveExplanation
 from chess_ml.explanation.service import ExplanationService
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, PgnParseError, parse_pgn
 
@@ -199,6 +199,7 @@ class ExplainMoveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     move: AnnotatedMoveModel
+    actual_line: list[MoveRefModel] = Field(default_factory=list, max_length=6)
 
 
 class AnalysisSummaryModel(BaseModel):
@@ -337,7 +338,9 @@ async def explain_move(
     """Generate a coaching explanation for one selected flagged move."""
 
     explanation_service = cast(ExplanationService, request.app.state.explanation_service)
-    explanation = await explanation_service.explain(_explanation_request_from_model(payload.move))
+    explanation = await explanation_service.explain(
+        _explanation_request_from_model(payload.move, payload.actual_line)
+    )
     if explanation is None:
         explanation = MoveExplanation(
             status="unavailable",
@@ -449,11 +452,15 @@ def _explanation_request(
         analysis_before=analysis_before,
         analysis_after=analysis_after,
         loss_cp=_loss_cp(move.side, analysis_before.score, analysis_after.score),
+        actual_line=(),
         motifs=tuple(motifs),
     )
 
 
-def _explanation_request_from_model(move: AnnotatedMoveModel) -> ExplanationRequest:
+def _explanation_request_from_model(
+    move: AnnotatedMoveModel,
+    actual_line: Sequence[MoveRefModel],
+) -> ExplanationRequest:
     return ExplanationRequest(
         ply=move.ply,
         move_number=move.move_number,
@@ -465,7 +472,20 @@ def _explanation_request_from_model(move: AnnotatedMoveModel) -> ExplanationRequ
         analysis_before=_engine_evaluation(move.analysis_before),
         analysis_after=_engine_evaluation(move.analysis_after),
         loss_cp=move.loss_cp,
+        actual_line=tuple(
+            _line_move(move, index, line_move) for index, line_move in enumerate(actual_line)
+        ),
         motifs=tuple(_classified_motif(motif) for motif in move.motifs),
+    )
+
+
+def _line_move(selected: AnnotatedMoveModel, index: int, move: MoveRefModel) -> LineMove:
+    ply = selected.ply + index
+    return LineMove(
+        ply=ply,
+        side="white" if ply % 2 == 1 else "black",
+        san=move.san,
+        uci=move.uci,
     )
 
 

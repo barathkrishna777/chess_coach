@@ -20,7 +20,12 @@ from chess_ml.explanation.client import (
     LocalProviderUnavailableError,
     client_from_env,
 )
-from chess_ml.explanation.models import ExplanationProvider, ExplanationRequest, MoveExplanation
+from chess_ml.explanation.models import (
+    ExplanationProvider,
+    ExplanationRequest,
+    LineMove,
+    MoveExplanation,
+)
 from chess_ml.explanation.prompt import SYSTEM_PROMPT, build_prompt, validate_provider_response
 from chess_ml.explanation.service import ExplanationService
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, parse_pgn
@@ -46,6 +51,12 @@ def test_prompt_uses_before_line_for_missed_tactic() -> None:
     assert prompt.expected_move_uci == "c3d5"
     assert prompt.facts["engine"]["line_source"] == "before"
     assert prompt.facts["position"]["fen_before"] == request.fen_before
+    assert prompt.facts["actual_line"][0] == {
+        "ply": 7,
+        "side": "white",
+        "san": "Nf3",
+        "uci": "g1f3",
+    }
     assert "c3d5" in prompt.user_prompt
     assert "Nxd5" in prompt.user_prompt
 
@@ -80,6 +91,7 @@ def test_prompt_uses_after_line_for_allowed_tactic() -> None:
 def test_system_prompt_contains_grounding_rules_without_image_language() -> None:
     assert "Stockfish is ground truth" in SYSTEM_PROMPT
     assert "never contradict" in SYSTEM_PROMPT
+    assert "Compare what the player did with what Stockfish recommended" in SYSTEM_PROMPT
     assert "strict JSON" in SYSTEM_PROMPT
     assert "at most 3 sentences" in SYSTEM_PROMPT
     lowered = SYSTEM_PROMPT.lower()
@@ -271,7 +283,20 @@ def _request_for_ply(
         analysis_before=analyzed.analysis_before,
         analysis_after=analyzed.analysis_after,
         loss_cp=_loss_cp(move, analyzed.analysis_before, analyzed.analysis_after),
+        actual_line=_actual_line(parsed, ply),
         motifs=motifs,
+    )
+
+
+def _actual_line(parsed: ParsedPgnGame, ply: int) -> tuple[LineMove, ...]:
+    return tuple(
+        LineMove(
+            ply=move.ply,
+            side=move.side,
+            san=move.san,
+            uci=move.uci,
+        )
+        for move in parsed.moves[ply - 1 : ply + 5]
     )
 
 

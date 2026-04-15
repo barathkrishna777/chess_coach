@@ -69,6 +69,8 @@ Add `chess_ml/explanation/prompt.py` with structured prompt assembly around
 Prompt input includes:
 
 - `fen_before`, `fen_after`, `user_move` SAN/UCI, side to move, move number.
+- `actual_line`: the selected move plus up to five following moves from the game, in SAN
+  and UCI.
 - `analysis_before.best_move`, `analysis_before.pv`, `analysis_after.best_move`,
   `analysis_after.pv`.
 - `loss_cp`, mate/CP score kind, selected primary motif, all motif IDs, motif evidence
@@ -83,6 +85,8 @@ System prompt rules:
 
 - Stockfish is ground truth; never recommend a move that is not the provided engine best
   move/PV.
+- The LLM compares the player's move/actual game line with Stockfish's best move/PV; it
+  does not calculate chess.
 - Use only provided facts; do not infer hidden tactics beyond the PV/evidence.
 - Reference concrete moves, pieces, or squares.
 - Teach exactly one practical lesson for a 1200-2000 club player.

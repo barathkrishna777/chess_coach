@@ -25,6 +25,16 @@ ExplanationReason: TypeAlias = Literal[
 
 
 @dataclass(frozen=True)
+class LineMove:
+    """One move in a short SAN/UCI continuation."""
+
+    ply: int
+    side: Side
+    san: str
+    uci: str
+
+
+@dataclass(frozen=True)
 class ExplanationRequest:
     """The engine-grounded facts needed to explain one flagged move."""
 
@@ -38,6 +48,7 @@ class ExplanationRequest:
     analysis_before: EngineEvaluation
     analysis_after: EngineEvaluation
     loss_cp: int | None
+    actual_line: tuple[LineMove, ...]
     motifs: tuple[Motif, ...]
 
 

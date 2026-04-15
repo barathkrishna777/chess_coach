@@ -14,9 +14,10 @@ from chess_ml.explanation.models import PROMPT_VERSION, ExplanationRequest
 
 SYSTEM_PROMPT = """You are a chess coach explaining one mistake to a 1200-2000 rated club player.
 Stockfish is ground truth: never contradict the provided engine best move or PV.
-Use only the supplied FEN, moves, engine line, eval swing, and motif evidence; do not invent tactics.
-Reference concrete pieces, squares, or moves from the supplied facts.
-Teach exactly one practical lesson.
+Use only the supplied FEN, played move, actual game line, Stockfish line, eval swing, and motif evidence; do not invent tactics.
+Compare what the player did with what Stockfish recommended, then explain what changed.
+Reference concrete pieces, squares, or moves from those two supplied lines.
+Teach exactly one practical lesson; only discuss deeper positional ideas when the concrete lines do not already explain the mistake.
 Return strict JSON only: {"text":"...","referenced_move_uci":"..."}. The text must be at most 3 sentences and about 70 words or fewer."""
 
 SEVERITY_RANK: Mapping[str, int] = {"blunder": 3, "mistake": 2, "inaccuracy": 1}
@@ -74,6 +75,15 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
             "san": request.san,
             "uci": request.uci,
         },
+        "actual_line": [
+            {
+                "ply": move.ply,
+                "side": move.side,
+                "san": move.san,
+                "uci": move.uci,
+            }
+            for move in request.actual_line
+        ],
         "position": {
             "fen_before": request.fen_before,
             "fen_after": request.fen_after,
@@ -94,10 +104,13 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
             "schema": {"text": "string", "referenced_move_uci": "string|null"},
             "max_sentences": 3,
             "max_words": 70,
+            "required_content": "Compare the played move or actual line with Stockfish's best move or PV.",
         },
     }
     user_prompt = (
         "Use these engine-grounded facts to write one short coaching explanation.\n"
+        "Your job is comparison, not discovery: contrast move.san and actual_line with "
+        "engine.ground_truth_best_move and engine.ground_truth_pv.\n"
         "Do not mention any move as best unless it is the ground_truth_best_move or in "
         "ground_truth_pv.\n\n"
         f"{json.dumps(facts, sort_keys=True, separators=(',', ':'))}"
