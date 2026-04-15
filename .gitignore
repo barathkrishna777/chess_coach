@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.env.local
+
+# uv
+.python-version
+
+# ML artifacts
+checkpoints/
+*.pt
+*.pth
+*.onnx
+wandb/
+runs/
+lightning_logs/
+
+# Data (raw dumps and built datasets are large and reproducible)
+data/raw/
+data/processed/
+data/puzzles/
+*.pgn.zst
+*.pgn.bz2
+*.parquet
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+web/.next/
+web/out/
+web/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

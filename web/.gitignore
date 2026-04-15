@@ -1,0 +1,14 @@
+# Next.js
+.next/
+out/
+node_modules/
+npm-debug.log*
+.pnpm-debug.log*
+
+# TS build info
+*.tsbuildinfo
+next-env.d.ts.bak
+
+# env
+.env.local
+.env.*.local
