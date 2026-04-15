@@ -42,6 +42,7 @@ class BuiltPrompt:
     user_prompt: str
     facts: dict[str, Any]
     expected_move_uci: str | None
+    expected_move_san: str | None
     primary_motif_id: str
     prompt_version: str = PROMPT_VERSION
 
@@ -106,6 +107,7 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
         user_prompt=user_prompt,
         facts=facts,
         expected_move_uci=expected_move.uci if expected_move is not None else None,
+        expected_move_san=expected_move.san if expected_move is not None else None,
         primary_motif_id=primary.id,
     )
 
@@ -131,7 +133,9 @@ def validate_provider_response(raw_text: str, prompt: BuiltPrompt) -> ValidatedE
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        raise InvalidExplanationResponseError("Explanation response was not JSON.") from exc
+        parsed = _extract_json_object(raw_text)
+        if parsed is None:
+            raise InvalidExplanationResponseError("Explanation response was not JSON.") from exc
 
     if not isinstance(parsed, dict):
         raise InvalidExplanationResponseError("Explanation response must be a JSON object.")
@@ -142,16 +146,10 @@ def validate_provider_response(raw_text: str, prompt: BuiltPrompt) -> ValidatedE
         raise InvalidExplanationResponseError("Explanation text must be a non-empty string.")
     if referenced_move is not None and not isinstance(referenced_move, str):
         raise InvalidExplanationResponseError("referenced_move_uci must be a string or null.")
-    if (
-        referenced_move is not None
-        and prompt.expected_move_uci is not None
-        and referenced_move != prompt.expected_move_uci
-    ):
+    if not _references_engine_move(text, referenced_move, prompt):
         raise InvalidExplanationResponseError("Explanation referenced a non-engine move.")
-    if _sentence_count(text) > 3:
-        raise InvalidExplanationResponseError("Explanation exceeded the sentence limit.")
-    if len(re.findall(r"\b\w+\b", text)) > 80:
-        raise InvalidExplanationResponseError("Explanation exceeded the word budget.")
+    text = _trim_to_sentence_limit(text, max_sentences=3)
+    text = _trim_to_word_limit(text, max_words=80)
 
     return ValidatedExplanation(text=text.strip(), response_json=parsed)
 
@@ -215,3 +213,51 @@ def _move_ref_payload(move: MoveRef | None) -> dict[str, str] | None:
 def _sentence_count(text: str) -> int:
     fragments = [fragment for fragment in re.split(r"[.!?]+", text) if fragment.strip()]
     return len(fragments)
+
+
+def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(raw_text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _references_engine_move(
+    text: str,
+    referenced_move: str | None,
+    prompt: BuiltPrompt,
+) -> bool:
+    expected_refs = {
+        ref
+        for ref in (prompt.expected_move_uci, prompt.expected_move_san)
+        if ref is not None and ref.strip()
+    }
+    if not expected_refs:
+        return referenced_move is None
+    if referenced_move is None:
+        return any(ref in text for ref in expected_refs)
+    if referenced_move in expected_refs:
+        return True
+    return any(ref in text for ref in expected_refs)
+
+
+def _trim_to_sentence_limit(text: str, *, max_sentences: int) -> str:
+    matches = list(re.finditer(r"[^.!?]+[.!?]*", text))
+    sentences = [match.group(0).strip() for match in matches if match.group(0).strip()]
+    if len(sentences) <= max_sentences:
+        return text.strip()
+    return " ".join(sentences[:max_sentences]).strip()
+
+
+def _trim_to_word_limit(text: str, *, max_words: int) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text.strip()
+    return " ".join(words[:max_words]).rstrip(".,;:") + "."

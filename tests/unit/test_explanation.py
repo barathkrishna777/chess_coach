@@ -21,7 +21,7 @@ from chess_ml.explanation.client import (
     client_from_env,
 )
 from chess_ml.explanation.models import ExplanationProvider, ExplanationRequest, MoveExplanation
-from chess_ml.explanation.prompt import SYSTEM_PROMPT, build_prompt
+from chess_ml.explanation.prompt import SYSTEM_PROMPT, build_prompt, validate_provider_response
 from chess_ml.explanation.service import ExplanationService
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, parse_pgn
 
@@ -99,6 +99,29 @@ def test_cache_key_is_deterministic_and_tracks_engine_line() -> None:
     changed_facts["engine"]["ground_truth_pv"] = [{"uci": "g1f3", "san": "Nf3"}]
 
     assert cache_key_for_facts(facts) != cache_key_for_facts(changed_facts)
+
+
+def test_validation_accepts_wrapped_json_and_san_reference() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
+    validated = validate_provider_response(
+        '```json\n{"text":"Stockfish wanted Nxd5 from c3, winning the queen on d5. Check forcing captures before developing.","referenced_move_uci":"Nxd5"}\n```',
+        prompt,
+    )
+
+    assert validated.text.startswith("Stockfish wanted Nxd5")
+
+
+def test_validation_trims_long_local_model_answer() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
+    validated = validate_provider_response(
+        '{"text":"Stockfish wanted Nxd5 from c3, winning the queen on d5. This is the forcing capture. Before a quiet move, check captures. Extra sentence should not survive.","referenced_move_uci":"c3d5"}',
+        prompt,
+    )
+
+    assert validated.text.count(".") == 3
+    assert "Extra sentence" not in validated.text
 
 
 def test_missing_api_key_returns_unavailable(tmp_path: Path) -> None:
