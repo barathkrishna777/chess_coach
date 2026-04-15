@@ -34,6 +34,31 @@ a local open-source model through Ollama at http://localhost:11434. If Ollama or
 configured model is not running, review still works and the coach panel shows a setup
 note instead of blocking PGN analysis.
 
+## Local coach notes
+
+Coach notes are intentionally lazy: the app asks for one only when you click
+`Generate coach note` on a flagged move. Stockfish and the motif classifier provide the
+grounding facts; the LLM only turns those facts into short teaching text. Failed,
+timed-out, or untrusted model responses are not cached and never become fallback chess
+advice.
+
+Configuration:
+
+- `CHESS_ML_EXPLANATION_PROVIDER`: `auto`, `ollama`, `anthropic`, `codex`, or
+  `disabled`. Default `auto` uses local Ollama.
+- `CHESS_ML_EXPLANATION_TIMEOUT_SECONDS`: provider timeout budget. Default `15`.
+- `CHESS_ML_OLLAMA_BASE_URL`: local Ollama base URL. Default `http://localhost:11434`.
+- `CHESS_ML_OLLAMA_MODEL`: local model name. Default `qwen3:8b`.
+- `CHESS_ML_DB_PATH`: SQLite path for the explanation cache. Default
+  `data/chess_ml.sqlite3`.
+
+For local explanations:
+
+```bash
+ollama pull qwen3:8b
+ollama serve
+```
+
 ## Check
 
 ```bash

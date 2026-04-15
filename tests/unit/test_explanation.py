@@ -9,8 +9,11 @@ from pathlib import Path
 from typing import Literal
 
 import chess
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from chess_ml.api.games import _annotate_move
+from chess_ml.api.games import router as games_router
 from chess_ml.classifier.classify import classify_moves
 from chess_ml.classifier.motifs import AnalyzedMove
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
@@ -171,6 +174,26 @@ def test_local_provider_unavailable_is_non_fatal(tmp_path: Path) -> None:
     assert explanation.status == "unavailable"
     assert explanation.provider == "ollama"
     assert explanation.reason == "local_model_unavailable"
+    assert explanation.retryable is True
+
+
+def test_service_level_timeout_is_non_fatal_and_not_cached(tmp_path: Path) -> None:
+    request = _missed_tactic_request()
+    cache = ExplanationCache(tmp_path / "cache.sqlite3")
+    service = ExplanationService(
+        cache=cache,
+        client=_SlowClient(),
+        timeout_seconds=0.01,
+    )
+
+    explanation = asyncio.run(service.explain(request))
+
+    assert explanation is not None
+    assert explanation.status == "error"
+    assert explanation.reason == "timeout"
+    assert explanation.retryable is True
+    assert explanation.timeout_seconds == 0.01
+    assert cache.get(cache_key_for_facts(build_prompt(request).facts)) is None
 
 
 def test_cache_hit_skips_client_call(tmp_path: Path) -> None:
@@ -192,6 +215,7 @@ def test_cache_hit_skips_client_call(tmp_path: Path) -> None:
     assert second is not None
     assert second.status == "ok"
     assert second.source == "cache"
+    assert second.retryable is False
     assert client.calls == 1
 
 
@@ -208,7 +232,36 @@ def test_invalid_provider_response_is_not_cached(tmp_path: Path) -> None:
     assert explanation is not None
     assert explanation.status == "error"
     assert explanation.reason == "invalid_response"
+    assert explanation.retryable is True
     assert cache.get(cache_key_for_facts(build_prompt(request).facts)) is None
+
+
+def test_explanation_status_endpoint_does_not_contact_provider(tmp_path: Path) -> None:
+    client = _FakeClient('{"text":"Stockfish wanted Nxd5 from c3.","referenced_move_uci":"c3d5"}')
+    service = ExplanationService(
+        cache=ExplanationCache(tmp_path / "cache.sqlite3"),
+        client=client,
+        timeout_seconds=7.5,
+    )
+    app = FastAPI()
+    app.state.explanation_service = service
+    app.include_router(games_router)
+    api = TestClient(app)
+
+    response = api.get("/api/games/explain/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "explanation-status.v1",
+        "enabled": True,
+        "configured": True,
+        "provider": "anthropic",
+        "model": "fake-explainer",
+        "timeout_seconds": 7.5,
+        "availability": "not_checked",
+        "reason": None,
+    }
+    assert client.calls == 0
 
 
 def test_api_move_model_includes_nullable_explanation() -> None:
@@ -434,3 +487,17 @@ class _UnavailableLocalClient:
 
     async def complete(self, prompt: object) -> ClientResponse:
         raise LocalProviderUnavailableError("Ollama is not reachable.")
+
+
+class _SlowClient:
+    provider: ExplanationProvider = "ollama"
+    model = "slow-local"
+
+    async def complete(self, prompt: object) -> ClientResponse:
+        await asyncio.sleep(1)
+        return ClientResponse(
+            content='{"text":"Stockfish wanted Nxd5 from c3.","referenced_move_uci":"c3d5"}',
+            response_json={},
+            provider=self.provider,
+            model=self.model,
+        )

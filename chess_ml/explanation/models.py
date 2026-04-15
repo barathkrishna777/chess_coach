@@ -62,5 +62,7 @@ class MoveExplanation:
     provider: ExplanationProvider | None
     model: str | None
     reason: ExplanationReason | None
+    timeout_seconds: float | None = None
+    retryable: bool = False
     schema_version: str = EXPLANATION_SCHEMA_VERSION
     prompt_version: str = PROMPT_VERSION

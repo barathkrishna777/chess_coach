@@ -62,6 +62,19 @@ export type MoveExplanation = {
     | "local_model_unavailable"
     | "timeout"
     | null;
+  timeout_seconds: number | null;
+  retryable: boolean;
+};
+
+export type ExplanationStatus = {
+  schema_version: "explanation-status.v1";
+  enabled: boolean;
+  configured: boolean;
+  provider: "anthropic" | "codex" | "ollama" | null;
+  model: string | null;
+  timeout_seconds: number;
+  availability: "not_checked";
+  reason: "disabled" | "api_key_missing" | "unknown_provider" | null;
 };
 
 export type AnnotatedMove = {

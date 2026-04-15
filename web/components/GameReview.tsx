@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { Key, KeyPair } from "chessground/types";
 
 import Board from "@/components/Board";
-import { explainMove } from "@/lib/api";
+import { explainMove, getExplanationStatus } from "@/lib/api";
 import type {
   AnnotatedGame,
   AnnotatedMove,
   EngineMove,
+  ExplanationStatus,
   Motif,
   MotifSeverity,
   MoveExplanation,
@@ -23,7 +24,28 @@ type GameReviewProps = {
 export default function GameReview({ game, onGameChange }: GameReviewProps) {
   const [selectedIndex, setSelectedIndex] = useState(game.moves.length > 0 ? 0 : -1);
   const [explainingPly, setExplainingPly] = useState<number | null>(null);
+  const [coachStatus, setCoachStatus] = useState<ExplanationStatus | null>(null);
+  const [coachStatusError, setCoachStatusError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getExplanationStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setCoachStatus(status);
+          setCoachStatusError(null);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setCoachStatusError(caught instanceof Error ? caught.message : String(caught));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setSelectedIndex(game.moves.length > 0 ? 0 : -1);
@@ -87,6 +109,8 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
           <CurrentMovePanel
             move={selectedMove}
             game={game}
+            coachStatus={coachStatus}
+            coachStatusError={coachStatusError}
             isExplaining={selectedMove?.ply === explainingPly}
             onExplain={() => void explainSelectedMove()}
           />
@@ -155,11 +179,15 @@ function MoveList({
 function CurrentMovePanel({
   move,
   game,
+  coachStatus,
+  coachStatusError,
   isExplaining,
   onExplain,
 }: {
   move: AnnotatedMove | null;
   game: AnnotatedGame;
+  coachStatus: ExplanationStatus | null;
+  coachStatusError: string | null;
   isExplaining: boolean;
   onExplain: () => void;
 }) {
@@ -210,6 +238,8 @@ function CurrentMovePanel({
         <ExplanationText
           explanation={move.explanation}
           hasMotifs={move.motifs.length > 0}
+          coachStatus={coachStatus}
+          coachStatusError={coachStatusError}
           isExplaining={isExplaining}
           onExplain={onExplain}
         />
@@ -221,11 +251,15 @@ function CurrentMovePanel({
 function ExplanationText({
   explanation,
   hasMotifs,
+  coachStatus,
+  coachStatusError,
   isExplaining,
   onExplain,
 }: {
   explanation: MoveExplanation | null;
   hasMotifs: boolean;
+  coachStatus: ExplanationStatus | null;
+  coachStatusError: string | null;
   isExplaining: boolean;
   onExplain: () => void;
 }) {
@@ -236,38 +270,182 @@ function ExplanationText({
       </p>
     );
   }
+  const configText = coachConfigText(coachStatus, coachStatusError);
+  const requestBlocked = coachRequestBlocked(coachStatus);
+  if (isExplaining) {
+    return (
+      <div className="mt-2 grid gap-2">
+        <p className="text-sm leading-6 text-[#17201d]">
+          Generating a grounded coach note from the Stockfish line. This can take
+          a little while locally.
+        </p>
+        <p className="text-xs leading-5 text-[#65766f]">{configText}</p>
+        <button
+          type="button"
+          disabled
+          className="w-fit rounded-md bg-[#a9b6b0] px-3 py-2 text-sm font-semibold text-white"
+        >
+          Generating...
+        </button>
+      </div>
+    );
+  }
   if (!explanation) {
     return (
-      <button
-        type="button"
-        onClick={onExplain}
-        disabled={isExplaining}
-        className="mt-2 rounded-md bg-[#37786f] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#2c625a] disabled:cursor-not-allowed disabled:bg-[#a9b6b0]"
-      >
-        {isExplaining ? "Generating..." : "Generate coach note"}
-      </button>
+      <div className="mt-2 grid gap-2">
+        <p className="text-sm leading-6 text-[#4a5a54]">
+          No coach note requested yet.
+        </p>
+        <p className="text-xs leading-5 text-[#65766f]">{configText}</p>
+        {requestBlocked ? (
+          <p className="text-sm leading-6 text-[#912f28]">
+            Local coach notes are not configured right now.
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={onExplain}
+            className="w-fit rounded-md bg-[#37786f] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#2c625a]"
+          >
+            Generate coach note
+          </button>
+        )}
+      </div>
     );
   }
   if (explanation.status === "ok" && explanation.text) {
     return (
-      <p className="mt-2 text-sm leading-6 text-[#17201d]">
-        {explanation.text}
-      </p>
+      <div className="mt-2 grid gap-2">
+        <p className="text-sm leading-6 text-[#17201d]">{explanation.text}</p>
+        <p className="text-xs leading-5 text-[#65766f]">
+          {explanation.source === "cache"
+            ? "Cached coach note."
+            : `Generated by ${providerModelLabel(explanation.provider, explanation.model)}.`}
+        </p>
+      </div>
     );
   }
   if (explanation.status === "unavailable") {
     return (
-      <p className="mt-2 text-sm leading-6 text-[#4a5a54]">
-        Start Ollama and pull the local explanation model to turn on coaching
-        notes.
-      </p>
+      <RetryableCoachMessage
+        tone="neutral"
+        message={unavailableMessage(explanation)}
+        retryable={explanation.retryable}
+        onExplain={onExplain}
+        configText={configText}
+      />
     );
   }
   return (
-    <p className="mt-2 text-sm leading-6 text-[#912f28]">
-      The coaching note could not be grounded for this move.
-    </p>
+    <RetryableCoachMessage
+      tone="error"
+      message={errorExplanationMessage(explanation)}
+      retryable={explanation.retryable}
+      onExplain={onExplain}
+      configText={configText}
+    />
   );
+}
+
+function RetryableCoachMessage({
+  tone,
+  message,
+  retryable,
+  onExplain,
+  configText,
+}: {
+  tone: "neutral" | "error";
+  message: string;
+  retryable: boolean;
+  onExplain: () => void;
+  configText: string;
+}) {
+  return (
+    <div className="mt-2 grid gap-2">
+      <p
+        className={`text-sm leading-6 ${
+          tone === "error" ? "text-[#912f28]" : "text-[#4a5a54]"
+        }`}
+      >
+        {message}
+      </p>
+      <p className="text-xs leading-5 text-[#65766f]">{configText}</p>
+      {retryable ? (
+        <button
+          type="button"
+          onClick={onExplain}
+          className="w-fit rounded-md border border-[#37786f] px-3 py-2 text-sm font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
+        >
+          Retry coach note
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function coachConfigText(
+  status: ExplanationStatus | null,
+  statusError: string | null,
+): string {
+  if (statusError) return "Coach config could not be loaded.";
+  if (!status) return "Checking local coach config.";
+  const timeout = `${trimSeconds(status.timeout_seconds)}s budget`;
+  if (!status.enabled) return `Coach notes are disabled, ${timeout}.`;
+  if (!status.configured) {
+    return `Coach provider is not configured, ${timeout}.`;
+  }
+  return `${providerModelLabel(status.provider, status.model)}, ${timeout}.`;
+}
+
+function coachRequestBlocked(status: ExplanationStatus | null): boolean {
+  if (!status) return false;
+  return !status.enabled || !status.configured;
+}
+
+function providerModelLabel(
+  provider: MoveExplanation["provider"],
+  model: string | null,
+): string {
+  const providerLabel =
+    provider === "ollama"
+      ? "Ollama"
+      : provider === "anthropic"
+        ? "Anthropic"
+        : provider === "codex"
+          ? "Codex"
+          : "local coach";
+  return model ? `${providerLabel} ${model}` : providerLabel;
+}
+
+function unavailableMessage(explanation: MoveExplanation): string {
+  if (explanation.reason === "local_model_unavailable") {
+    return "Ollama or the configured local model is unavailable. Start Ollama and pull the model, then retry.";
+  }
+  if (explanation.reason === "api_key_missing") {
+    return "The selected coach provider is missing local configuration.";
+  }
+  return "Coach notes are unavailable right now.";
+}
+
+function errorExplanationMessage(explanation: MoveExplanation): string {
+  if (explanation.reason === "timeout") {
+    const timeout =
+      explanation.timeout_seconds === null
+        ? "the local timeout"
+        : `${trimSeconds(explanation.timeout_seconds)}s`;
+    return `The local coach hit the ${timeout} budget before returning a trusted note. Nothing was cached.`;
+  }
+  if (explanation.reason === "invalid_response") {
+    return "The model responded, but the answer could not be trusted against Stockfish's line. Nothing was cached.";
+  }
+  if (explanation.reason === "provider_error") {
+    return "The coach provider returned an error before a trusted note could be generated.";
+  }
+  return "The coaching note could not be grounded for this move.";
+}
+
+function trimSeconds(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
 }
 
 function MotifChips({

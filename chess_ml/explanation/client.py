@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, TypeAlias
 
 from chess_ml.explanation.models import ExplanationProvider
 from chess_ml.explanation.prompt import BuiltPrompt
@@ -20,7 +20,8 @@ DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6"
 DEFAULT_CODEX_MODEL = "Codex-opus-4-6"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 15.0
+SelectionReason: TypeAlias = Literal["disabled", "api_key_missing", "unknown_provider"]
 
 
 class ProviderError(RuntimeError):
@@ -39,6 +40,19 @@ class ClientResponse:
     response_json: dict[str, Any]
     provider: ExplanationProvider
     model: str
+
+
+@dataclass(frozen=True)
+class ClientSelection:
+    """Configured explanation client plus non-probing status facts."""
+
+    client: ExplanationClient | None
+    enabled: bool
+    configured: bool
+    provider: ExplanationProvider | None
+    model: str | None
+    timeout_seconds: float
+    reason: SelectionReason | None
 
 
 class ExplanationClient(Protocol):
@@ -208,31 +222,81 @@ class OllamaExplanationClient:
 def client_from_env() -> ExplanationClient | None:
     """Create a provider client from local env, or None when disabled/missing."""
 
+    return select_client_from_env().client
+
+
+def select_client_from_env() -> ClientSelection:
+    """Create a provider client and status facts without contacting the provider."""
+
     load_dotenv()
     provider = os.environ.get("CHESS_ML_EXPLANATION_PROVIDER", "auto").strip().lower()
-    if provider == "disabled":
-        return None
     timeout = _env_float("CHESS_ML_EXPLANATION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
+    if provider == "disabled":
+        return ClientSelection(
+            client=None,
+            enabled=False,
+            configured=False,
+            provider=None,
+            model=None,
+            timeout_seconds=timeout,
+            reason="disabled",
+        )
 
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     codex_key = os.environ.get("CODEX_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if provider == "anthropic":
-        return (
-            AnthropicExplanationClient(api_key=anthropic_key, timeout_seconds=timeout)
-            if anthropic_key
-            else None
+        if not anthropic_key:
+            return ClientSelection(
+                client=None,
+                enabled=True,
+                configured=False,
+                provider="anthropic",
+                model=os.environ.get("CHESS_ML_ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL),
+                timeout_seconds=timeout,
+                reason="api_key_missing",
+            )
+        anthropic_client = AnthropicExplanationClient(
+            api_key=anthropic_key,
+            timeout_seconds=timeout,
         )
+        return _configured_selection(anthropic_client, timeout)
     if provider == "codex":
-        return (
-            CodexExplanationClient(api_key=codex_key, timeout_seconds=timeout)
-            if codex_key
-            else None
-        )
+        if not codex_key:
+            return ClientSelection(
+                client=None,
+                enabled=True,
+                configured=False,
+                provider="codex",
+                model=os.environ.get("CHESS_ML_CODEX_MODEL", DEFAULT_CODEX_MODEL),
+                timeout_seconds=timeout,
+                reason="api_key_missing",
+            )
+        codex_client = CodexExplanationClient(api_key=codex_key, timeout_seconds=timeout)
+        return _configured_selection(codex_client, timeout)
     if provider in {"ollama", "auto"}:
-        return OllamaExplanationClient(timeout_seconds=timeout)
-    if provider != "auto":
-        return None
-    return None
+        ollama_client = OllamaExplanationClient(timeout_seconds=timeout)
+        return _configured_selection(ollama_client, timeout)
+    return ClientSelection(
+        client=None,
+        enabled=False,
+        configured=False,
+        provider=None,
+        model=None,
+        timeout_seconds=timeout,
+        reason="unknown_provider",
+    )
+
+
+def _configured_selection(client: ExplanationClient, timeout_seconds: float) -> ClientSelection:
+    return ClientSelection(
+        client=client,
+        enabled=True,
+        configured=True,
+        provider=client.provider,
+        model=client.model,
+        timeout_seconds=timeout_seconds,
+        reason=None,
+    )
 
 
 def load_dotenv(path: str | Path = ".env") -> None:

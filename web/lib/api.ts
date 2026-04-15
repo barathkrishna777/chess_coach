@@ -3,6 +3,7 @@ import type {
   AnnotatedMove,
   ApiErrorEnvelope,
   EngineMove,
+  ExplanationStatus,
   MoveExplanation,
   PlayState,
 } from "@/lib/types";
@@ -10,6 +11,7 @@ import type {
 const API_BASE_URL = "http://localhost:8000";
 const GAMES_URL = `${API_BASE_URL}/api/games`;
 const EXPLAIN_URL = `${API_BASE_URL}/api/games/explain`;
+const EXPLAIN_STATUS_URL = `${API_BASE_URL}/api/games/explain/status`;
 const PLAY_URL = `${API_BASE_URL}/api/play`;
 
 export async function analyzePgn(pgn: string): Promise<AnnotatedGame> {
@@ -42,6 +44,15 @@ export async function explainMove(
     throw new Error(errorMessage(body, response.status));
   }
   return body as MoveExplanation;
+}
+
+export async function getExplanationStatus(): Promise<ExplanationStatus> {
+  const response = await fetch(EXPLAIN_STATUS_URL);
+  const body: unknown = await response.json();
+  if (!response.ok) {
+    throw new Error(errorMessage(body, response.status));
+  }
+  return body as ExplanationStatus;
 }
 
 export async function startPlayGame(): Promise<PlayState> {

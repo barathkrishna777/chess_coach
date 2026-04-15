@@ -27,7 +27,7 @@ from chess_ml.engine.stockfish import (
     StockfishUnavailableError,
 )
 from chess_ml.explanation.models import ExplanationRequest, LineMove, MoveExplanation
-from chess_ml.explanation.service import ExplanationService
+from chess_ml.explanation.service import ExplanationService, ExplanationServiceStatus
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, PgnParseError, parse_pgn
 
 router = APIRouter(prefix="/api/games", tags=["games"])
@@ -169,6 +169,21 @@ class MoveExplanationModel(BaseModel):
         ]
         | None
     )
+    timeout_seconds: float | None = None
+    retryable: bool = False
+
+
+class ExplanationStatusModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["explanation-status.v1"]
+    enabled: bool
+    configured: bool
+    provider: Literal["anthropic", "codex", "ollama"] | None
+    model: str | None
+    timeout_seconds: float
+    availability: Literal["not_checked"]
+    reason: Literal["disabled", "api_key_missing", "unknown_provider"] | None
 
 
 class AnnotatedMoveModel(BaseModel):
@@ -354,6 +369,14 @@ async def explain_move(
     if model is None:
         raise RuntimeError("Explanation model cannot be None for explain endpoint.")
     return model
+
+
+@router.get("/explain/status", response_model=ExplanationStatusModel)
+async def explanation_status(request: Request) -> ExplanationStatusModel:
+    """Return local coach configuration without probing the provider."""
+
+    explanation_service = cast(ExplanationService, request.app.state.explanation_service)
+    return _explanation_status_model(explanation_service.status())
 
 
 async def _evaluate_positions(
@@ -629,6 +652,21 @@ def _explanation_model(explanation: MoveExplanation | None) -> MoveExplanationMo
         model=explanation.model,
         prompt_version="grounded-coach.v1",
         reason=explanation.reason,
+        timeout_seconds=explanation.timeout_seconds,
+        retryable=explanation.retryable,
+    )
+
+
+def _explanation_status_model(status: ExplanationServiceStatus) -> ExplanationStatusModel:
+    return ExplanationStatusModel(
+        schema_version="explanation-status.v1",
+        enabled=status.enabled,
+        configured=status.configured,
+        provider=status.provider,
+        model=status.model,
+        timeout_seconds=status.timeout_seconds,
+        availability=status.availability,
+        reason=status.reason,
     )
 
 
