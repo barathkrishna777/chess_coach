@@ -4,10 +4,6 @@ import { useEffect, useState } from "react";
 
 type Health = { status: string; version: string };
 
-/**
- * Slice 0 smoke signal: proves the Next.js dev server can reach the FastAPI
- * backend on :8000. If the dot is green, the full stack is wired up.
- */
 export default function HealthIndicator() {
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,15 +26,15 @@ export default function HealthIndicator() {
     };
   }, []);
 
-  const color = error ? "bg-red-500" : health ? "bg-emerald-500" : "bg-slate-500";
+  const color = error ? "bg-[#d84f45]" : health ? "bg-[#37786f]" : "bg-[#a9b6b0]";
   const label = error
     ? `API unreachable: ${error}`
-    : health
-    ? `API up — v${health.version}`
-    : "Checking API…";
+    : health?.status === "ok"
+    ? `API up - v${health.version}`
+    : "Checking API...";
 
   return (
-    <div className="flex items-center gap-2 text-xs text-slate-400">
+    <div className="flex items-center gap-2 text-xs text-[#4a5a54]">
       <span className={`inline-block w-2 h-2 rounded-full ${color}`} />
       <span>{label}</span>
     </div>

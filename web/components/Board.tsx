@@ -4,14 +4,21 @@ import { useEffect, useRef } from "react";
 import { Chessground } from "chessground";
 import type { Api } from "chessground/api";
 import type { Config } from "chessground/config";
+import type { Color, KeyPair } from "chessground/types";
 
-/**
- * Slice 0 board: renders the starting position and allows free piece movement
- * on both sides. No engine, no move legality, no analysis — that arrives in
- * later slices. This component exists to prove chessground is wired up and
- * the page renders an interactive board from FEN.
- */
-export default function Board() {
+const START_POSITION = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+
+type BoardProps = {
+  fen: string;
+  lastMove?: KeyPair | null;
+  orientation?: Color;
+};
+
+export default function Board({
+  fen,
+  lastMove = null,
+  orientation = "white",
+}: BoardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const apiRef = useRef<Api | null>(null);
 
@@ -19,14 +26,17 @@ export default function Board() {
     if (!ref.current) return;
 
     const config: Config = {
-      fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+      fen: START_POSITION,
       orientation: "white",
+      viewOnly: true,
+      selectable: {
+        enabled: false,
+      },
       movable: {
-        free: true,
-        color: "both",
+        free: false,
       },
       draggable: {
-        enabled: true,
+        enabled: false,
       },
       highlight: {
         lastMove: true,
@@ -41,10 +51,22 @@ export default function Board() {
     };
   }, []);
 
+  useEffect(() => {
+    apiRef.current?.set({
+      fen: boardFen(fen),
+      orientation,
+      lastMove: lastMove ? [...lastMove] : undefined,
+    });
+  }, [fen, lastMove, orientation]);
+
   return (
     <div
       ref={ref}
-      className="w-full aspect-square rounded-md overflow-hidden shadow-2xl"
+      className="w-full aspect-square rounded-md overflow-hidden border border-[#1f2a24]"
     />
   );
+}
+
+function boardFen(fen: string): string {
+  return fen.split(" ")[0] ?? fen;
 }
