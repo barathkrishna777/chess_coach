@@ -28,6 +28,36 @@ type EngineAnalysis = {
   time_ms: number;
 };
 
+type MotifSeverity = "inaccuracy" | "mistake" | "blunder";
+
+type Motif = {
+  id:
+    | "hanging_piece"
+    | "missed_tactic"
+    | "allowed_tactic"
+    | "endgame_slip"
+    | "opening_inaccuracy";
+  label: string;
+  severity: MotifSeverity;
+  source: "heuristic";
+  score_cp: number | null;
+  evidence: {
+    threshold_cp: number;
+    score_kind: "cp" | "mate";
+    phase: "opening" | "middlegame" | "endgame";
+    piece: {
+      color: "white" | "black";
+      role: "pawn" | "knight" | "bishop" | "rook" | "queen";
+      square: string;
+    } | null;
+    attackers: string[];
+    defenders: string[];
+    best_move: EngineMove | null;
+    opponent_reply: EngineMove | null;
+    related_ply: number | null;
+  };
+};
+
 type AnnotatedMove = {
   ply: number;
   move_number: number;
@@ -44,6 +74,7 @@ type AnnotatedMove = {
   eval_delta_cp_white: number | null;
   loss_cp: number | null;
   is_engine_best: boolean;
+  motifs: Motif[];
 };
 
 type AnnotatedGame = {
@@ -267,7 +298,7 @@ function MoveList({
             key={`${move.ply}-${move.uci}`}
             type="button"
             onClick={() => onSelect(index)}
-            className={`grid w-full grid-cols-[3rem_1fr_4.5rem] items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition ${
+            className={`grid w-full grid-cols-[3rem_minmax(0,1fr)_4.5rem] items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition ${
               selectedIndex === index
                 ? "bg-[#e1f2ed] text-[#17201d]"
                 : "hover:bg-[#f0f5f2]"
@@ -276,7 +307,10 @@ function MoveList({
             <span className="font-mono text-xs text-[#65766f]">
               {move.side === "white" ? `${move.move_number}.` : `${move.move_number}...`}
             </span>
-            <span className="font-semibold">{move.san}</span>
+            <span className="min-w-0">
+              <span className="font-semibold">{move.san}</span>
+              <MotifChips motifs={move.motifs} compact />
+            </span>
             <span className={`text-right text-xs ${lossClass(move.loss_cp)}`}>
               {lossLabel(move.loss_cp)}
             </span>
@@ -324,7 +358,42 @@ function CurrentMovePanel({
           value={move.analysis_before.pv.map((pvMove) => pvMove.san).join(" ") || "None"}
         />
       </dl>
+      <div className="mt-4 border-t border-[#e3e9e5] pt-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
+          Motifs
+        </h3>
+        {move.motifs.length > 0 ? (
+          <MotifChips motifs={move.motifs} />
+        ) : (
+          <p className="mt-2 text-sm text-[#4a5a54]">No motif detected.</p>
+        )}
+      </div>
     </section>
+  );
+}
+
+function MotifChips({
+  motifs,
+  compact = false,
+}: {
+  motifs: Motif[];
+  compact?: boolean;
+}) {
+  if (motifs.length === 0) return null;
+
+  return (
+    <span className={`flex flex-wrap gap-1 ${compact ? "mt-1" : "mt-2"}`}>
+      {motifs.map((motif) => (
+        <span
+          key={motif.id}
+          className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${motifClass(
+            motif.severity,
+          )}`}
+        >
+          {motif.label}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -376,6 +445,16 @@ function lossClass(loss: number | null): string {
   if (loss === null || loss < 50) return "text-[#37786f]";
   if (loss < 150) return "text-[#9a6b16]";
   return "text-[#bd4138]";
+}
+
+function motifClass(severity: MotifSeverity): string {
+  if (severity === "inaccuracy") {
+    return "border-[#e1bc4f] bg-[#fff2bf] text-[#6f4b00]";
+  }
+  if (severity === "mistake") {
+    return "border-[#e3a45d] bg-[#ffe4c7] text-[#7a3f10]";
+  }
+  return "border-[#e28a82] bg-[#ffe4df] text-[#912f28]";
 }
 
 function gameTitle(game: AnnotatedGame | null): string {

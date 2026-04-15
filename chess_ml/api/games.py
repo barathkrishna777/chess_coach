@@ -6,12 +6,16 @@ import asyncio
 import hashlib
 import os
 import time
+from collections.abc import Sequence
 from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from chess_ml.classifier.classify import classify_moves
+from chess_ml.classifier.motifs import AnalyzedMove
+from chess_ml.classifier.motifs import Motif as ClassifiedMotif
 from chess_ml.engine.stockfish import (
     CentipawnScore,
     EngineEvaluation,
@@ -100,6 +104,45 @@ class EngineAnalysisModel(BaseModel):
     time_ms: int
 
 
+class MotifPieceModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    color: Literal["white", "black"]
+    role: Literal["pawn", "knight", "bishop", "rook", "queen"]
+    square: str
+
+
+class MotifEvidenceModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    threshold_cp: int
+    score_kind: Literal["cp", "mate"]
+    phase: Literal["opening", "middlegame", "endgame"]
+    piece: MotifPieceModel | None
+    attackers: list[str]
+    defenders: list[str]
+    best_move: MoveRefModel | None
+    opponent_reply: MoveRefModel | None
+    related_ply: int | None
+
+
+class MotifModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: Literal[
+        "hanging_piece",
+        "missed_tactic",
+        "allowed_tactic",
+        "endgame_slip",
+        "opening_inaccuracy",
+    ]
+    label: str
+    severity: Literal["inaccuracy", "mistake", "blunder"]
+    source: Literal["heuristic"]
+    score_cp: int | None
+    evidence: MotifEvidenceModel
+
+
 class AnnotatedMoveModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -118,6 +161,7 @@ class AnnotatedMoveModel(BaseModel):
     eval_delta_cp_white: int | None
     loss_cp: int | None
     is_engine_best: bool
+    motifs: list[MotifModel]
 
 
 class AnalysisSummaryModel(BaseModel):
@@ -206,9 +250,19 @@ async def _annotate_game(
     unique_fens = _unique_positions(parsed_game)
     evaluations = await _evaluate_positions(unique_fens, pool=pool, depth=depth)
 
-    annotated_moves = [
-        _annotate_move(move, evaluations[move.fen_before], evaluations[move.fen_after])
+    analyzed_moves = [
+        _analyzed_move(move, evaluations[move.fen_before], evaluations[move.fen_after])
         for move in parsed_game.moves
+    ]
+    motif_lists = classify_moves(analyzed_moves, initial_fen=parsed_game.initial_fen)
+    annotated_moves = [
+        _annotate_move(
+            move,
+            evaluations[move.fen_before],
+            evaluations[move.fen_after],
+            motifs,
+        )
+        for move, motifs in zip(parsed_game.moves, motif_lists, strict=True)
     ]
     elapsed_ms = round((time.perf_counter() - started_at) * 1000)
 
@@ -265,6 +319,7 @@ def _annotate_move(
     move: ParsedPgnMove,
     analysis_before: EngineEvaluation,
     analysis_after: EngineEvaluation,
+    motifs: Sequence[ClassifiedMotif],
 ) -> AnnotatedMoveModel:
     return AnnotatedMoveModel(
         ply=move.ply,
@@ -284,6 +339,25 @@ def _annotate_move(
         is_engine_best=(
             analysis_before.best_move is not None and analysis_before.best_move.uci == move.uci
         ),
+        motifs=[_motif_model(motif) for motif in motifs],
+    )
+
+
+def _analyzed_move(
+    move: ParsedPgnMove,
+    analysis_before: EngineEvaluation,
+    analysis_after: EngineEvaluation,
+) -> AnalyzedMove:
+    return AnalyzedMove(
+        ply=move.ply,
+        move_number=move.move_number,
+        side=move.side,
+        san=move.san,
+        uci=move.uci,
+        fen_before=move.fen_before,
+        fen_after=move.fen_after,
+        analysis_before=analysis_before,
+        analysis_after=analysis_after,
     )
 
 
@@ -315,6 +389,41 @@ def _move_ref_model(move: EngineMove | None) -> MoveRefModel | None:
 
 def _required_move_ref_model(move: EngineMove) -> MoveRefModel:
     return MoveRefModel(uci=move.uci, san=move.san)
+
+
+def _motif_model(motif: ClassifiedMotif) -> MotifModel:
+    evidence = motif.evidence
+    piece = evidence.piece
+    return MotifModel(
+        id=motif.id,
+        label=motif.label,
+        severity=motif.severity,
+        source=motif.source,
+        score_cp=motif.score_cp,
+        evidence=MotifEvidenceModel(
+            threshold_cp=evidence.threshold_cp,
+            score_kind=evidence.score_kind,
+            phase=evidence.phase,
+            piece=(
+                MotifPieceModel(color=piece.color, role=piece.role, square=piece.square)
+                if piece is not None
+                else None
+            ),
+            attackers=list(evidence.attackers),
+            defenders=list(evidence.defenders),
+            best_move=(
+                MoveRefModel(uci=evidence.best_move.uci, san=evidence.best_move.san)
+                if evidence.best_move is not None
+                else None
+            ),
+            opponent_reply=(
+                MoveRefModel(uci=evidence.opponent_reply.uci, san=evidence.opponent_reply.san)
+                if evidence.opponent_reply is not None
+                else None
+            ),
+            related_ply=evidence.related_ply,
+        ),
+    )
 
 
 def _eval_delta_cp_white(before: EngineScore, after: EngineScore) -> int | None:
