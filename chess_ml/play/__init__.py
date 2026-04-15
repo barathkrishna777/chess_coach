@@ -1,0 +1,1 @@
+"""Play-mode session domain."""
