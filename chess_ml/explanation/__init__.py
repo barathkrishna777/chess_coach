@@ -1,5 +1,6 @@
-"""LLM explanation layer with engine-grounded prompting and caching.
+"""LLM explanation layer with engine-grounded prompting and caching."""
 
-Slice 3 adds prompt.py, client.py, cache.py. See CLAUDE.md hard constraint 2:
-explanations must never contradict the engine's PV.
-"""
+from chess_ml.explanation.models import MoveExplanation
+from chess_ml.explanation.service import ExplanationService
+
+__all__ = ["ExplanationService", "MoveExplanation"]

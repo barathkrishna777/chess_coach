@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from chess_ml import __version__
 from chess_ml.api.games import router as games_router
 from chess_ml.engine.stockfish import StockfishPool, StockfishUnavailableError
+from chess_ml.explanation.service import service_from_env
 
 
 @asynccontextmanager
@@ -24,6 +25,7 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncIterator[None]:
     """Own local engine resources for the API process."""
 
     fastapi_app.state.review_lock = asyncio.Lock()
+    fastapi_app.state.explanation_service = service_from_env()
     pool = StockfishPool.from_env()
     try:
         await pool.start()

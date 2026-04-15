@@ -58,6 +58,22 @@ type Motif = {
   };
 };
 
+type MoveExplanation = {
+  schema_version: "move-explanation.v1";
+  status: "ok" | "unavailable" | "error";
+  text: string | null;
+  source: "cache" | "llm" | null;
+  provider: "anthropic" | "codex" | null;
+  model: string | null;
+  prompt_version: "grounded-coach.v1";
+  reason:
+    | "api_key_missing"
+    | "provider_error"
+    | "invalid_response"
+    | "timeout"
+    | null;
+};
+
 type AnnotatedMove = {
   ply: number;
   move_number: number;
@@ -75,6 +91,7 @@ type AnnotatedMove = {
   loss_cp: number | null;
   is_engine_best: boolean;
   motifs: Motif[];
+  explanation: MoveExplanation | null;
 };
 
 type AnnotatedGame = {
@@ -368,7 +385,46 @@ function CurrentMovePanel({
           <p className="mt-2 text-sm text-[#4a5a54]">No motif detected.</p>
         )}
       </div>
+      <div className="mt-4 border-t border-[#e3e9e5] pt-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
+          Coach
+        </h3>
+        <ExplanationText explanation={move.explanation} />
+      </div>
     </section>
+  );
+}
+
+function ExplanationText({
+  explanation,
+}: {
+  explanation: MoveExplanation | null;
+}) {
+  if (!explanation) {
+    return (
+      <p className="mt-2 text-sm leading-6 text-[#4a5a54]">
+        No coaching note for this move.
+      </p>
+    );
+  }
+  if (explanation.status === "ok" && explanation.text) {
+    return (
+      <p className="mt-2 text-sm leading-6 text-[#17201d]">
+        {explanation.text}
+      </p>
+    );
+  }
+  if (explanation.status === "unavailable") {
+    return (
+      <p className="mt-2 text-sm leading-6 text-[#4a5a54]">
+        Add an explanation API key in .env to turn on coaching notes.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 text-sm leading-6 text-[#912f28]">
+      The coaching note could not be grounded for this move.
+    </p>
   );
 }
 

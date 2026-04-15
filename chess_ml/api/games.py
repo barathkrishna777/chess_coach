@@ -26,6 +26,8 @@ from chess_ml.engine.stockfish import (
     StockfishProtocolError,
     StockfishUnavailableError,
 )
+from chess_ml.explanation.models import ExplanationRequest, MoveExplanation
+from chess_ml.explanation.service import ExplanationService, explain_many
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, PgnParseError, parse_pgn
 
 router = APIRouter(prefix="/api/games", tags=["games"])
@@ -33,6 +35,10 @@ router = APIRouter(prefix="/api/games", tags=["games"])
 MAX_PGN_CHARS = 200_000
 MAX_PLIES = 160
 DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 14.5
+
+
+class AnalysisTimeoutError(TimeoutError):
+    """Raised when Stockfish analysis exceeds the review budget."""
 
 
 class CreateGameRequest(BaseModel):
@@ -143,6 +149,27 @@ class MotifModel(BaseModel):
     evidence: MotifEvidenceModel
 
 
+class MoveExplanationModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["move-explanation.v1"]
+    status: Literal["ok", "unavailable", "error"]
+    text: str | None
+    source: Literal["cache", "llm"] | None
+    provider: Literal["anthropic", "codex"] | None
+    model: str | None
+    prompt_version: Literal["grounded-coach.v1"]
+    reason: (
+        Literal[
+            "api_key_missing",
+            "provider_error",
+            "invalid_response",
+            "timeout",
+        ]
+        | None
+    )
+
+
 class AnnotatedMoveModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -162,6 +189,7 @@ class AnnotatedMoveModel(BaseModel):
     loss_cp: int | None
     is_engine_best: bool
     motifs: list[MotifModel]
+    explanation: MoveExplanationModel | None
 
 
 class AnalysisSummaryModel(BaseModel):
@@ -213,6 +241,7 @@ async def create_annotated_game(
         return _error_response(503, "stockfish_unavailable", message)
 
     review_lock = cast(asyncio.Lock, request.app.state.review_lock)
+    explanation_service = cast(ExplanationService, request.app.state.explanation_service)
     if review_lock.locked():
         return _error_response(
             429,
@@ -222,15 +251,17 @@ async def create_annotated_game(
 
     await review_lock.acquire()
     try:
-        return await asyncio.wait_for(
-            _annotate_game(parsed_game, pool=pool, depth=pool.depth),
-            timeout=_analysis_timeout_seconds(),
+        return await _annotate_game(
+            parsed_game,
+            pool=pool,
+            depth=pool.depth,
+            explanation_service=explanation_service,
         )
-    except TimeoutError:
+    except AnalysisTimeoutError:
         return _error_response(
             504,
             "analysis_timeout",
-            "Stockfish analysis exceeded the Slice 1 wall-clock budget.",
+            "Stockfish analysis exceeded the wall-clock budget.",
         )
     except StockfishUnavailableError as exc:
         return _error_response(503, "stockfish_unavailable", str(exc))
@@ -245,24 +276,47 @@ async def _annotate_game(
     *,
     pool: StockfishPool,
     depth: int,
+    explanation_service: ExplanationService,
 ) -> AnnotatedGameModel:
     started_at = time.perf_counter()
     unique_fens = _unique_positions(parsed_game)
-    evaluations = await _evaluate_positions(unique_fens, pool=pool, depth=depth)
+    try:
+        evaluations = await asyncio.wait_for(
+            _evaluate_positions(unique_fens, pool=pool, depth=depth),
+            timeout=_analysis_timeout_seconds(),
+        )
+    except TimeoutError as exc:
+        raise AnalysisTimeoutError from exc
 
     analyzed_moves = [
         _analyzed_move(move, evaluations[move.fen_before], evaluations[move.fen_after])
         for move in parsed_game.moves
     ]
     motif_lists = classify_moves(analyzed_moves, initial_fen=parsed_game.initial_fen)
-    annotated_moves = [
-        _annotate_move(
+    explanation_requests = [
+        _explanation_request(
             move,
             evaluations[move.fen_before],
             evaluations[move.fen_after],
             motifs,
         )
         for move, motifs in zip(parsed_game.moves, motif_lists, strict=True)
+    ]
+    explanations = await explain_many(explanation_service, explanation_requests)
+    annotated_moves = [
+        _annotate_move(
+            move,
+            evaluations[move.fen_before],
+            evaluations[move.fen_after],
+            motifs,
+            explanation,
+        )
+        for move, motifs, explanation in zip(
+            parsed_game.moves,
+            motif_lists,
+            explanations,
+            strict=True,
+        )
     ]
     elapsed_ms = round((time.perf_counter() - started_at) * 1000)
 
@@ -320,6 +374,7 @@ def _annotate_move(
     analysis_before: EngineEvaluation,
     analysis_after: EngineEvaluation,
     motifs: Sequence[ClassifiedMotif],
+    explanation: MoveExplanation | None,
 ) -> AnnotatedMoveModel:
     return AnnotatedMoveModel(
         ply=move.ply,
@@ -340,6 +395,7 @@ def _annotate_move(
             analysis_before.best_move is not None and analysis_before.best_move.uci == move.uci
         ),
         motifs=[_motif_model(motif) for motif in motifs],
+        explanation=_explanation_model(explanation),
     )
 
 
@@ -358,6 +414,27 @@ def _analyzed_move(
         fen_after=move.fen_after,
         analysis_before=analysis_before,
         analysis_after=analysis_after,
+    )
+
+
+def _explanation_request(
+    move: ParsedPgnMove,
+    analysis_before: EngineEvaluation,
+    analysis_after: EngineEvaluation,
+    motifs: Sequence[ClassifiedMotif],
+) -> ExplanationRequest:
+    return ExplanationRequest(
+        ply=move.ply,
+        move_number=move.move_number,
+        side=move.side,
+        san=move.san,
+        uci=move.uci,
+        fen_before=move.fen_before,
+        fen_after=move.fen_after,
+        analysis_before=analysis_before,
+        analysis_after=analysis_after,
+        loss_cp=_loss_cp(move.side, analysis_before.score, analysis_after.score),
+        motifs=tuple(motifs),
     )
 
 
@@ -423,6 +500,21 @@ def _motif_model(motif: ClassifiedMotif) -> MotifModel:
             ),
             related_ply=evidence.related_ply,
         ),
+    )
+
+
+def _explanation_model(explanation: MoveExplanation | None) -> MoveExplanationModel | None:
+    if explanation is None:
+        return None
+    return MoveExplanationModel(
+        schema_version="move-explanation.v1",
+        status=explanation.status,
+        text=explanation.text,
+        source=explanation.source,
+        provider=explanation.provider,
+        model=explanation.model,
+        prompt_version="grounded-coach.v1",
+        reason=explanation.reason,
     )
 
 
