@@ -19,8 +19,9 @@ quality/cost pass.
 ## API And Schema
 
 Keep `schema_version: "annotated-game.v1"` and add an always-present nullable
-`explanation` field to each move. Unflagged moves get `null`; flagged moves get a status
-object even when no API key is configured.
+`explanation` field to each move. The upload path returns `null` for every move so PGN
+review is not blocked by local LLM latency; selected flagged moves are explained through
+an on-demand endpoint.
 
 ```ts
 type MoveExplanation = {
@@ -56,8 +57,9 @@ Rules:
 - `status: "ok"` requires non-empty `text`, at most 3 sentences.
 - `status: "unavailable"` is used for missing local key/config and never fails review.
 - `status: "error"` is used for provider timeout/error or failed response validation and
-  does not fail the whole `POST /api/games`.
-- No explanation is generated for moves with `motifs.length === 0`.
+  does not fail the review flow.
+- No explanation is generated automatically during `POST /api/games`.
+- No explanation is requested for moves with `motifs.length === 0`.
 
 ## Prompt And Grounding
 
@@ -149,8 +151,9 @@ Concrete provider selection comes from env:
   `CODEX_API_KEY`/`OPENAI_API_KEY` for the Codex/OpenAI-compatible path.
 - Load `.env` locally so the documented gitignored key workflow actually works.
 
-If no local model is running, `POST /api/games` still returns the full engine review and
-motifs. Flagged moves receive:
+`POST /api/games` returns the full engine review and motifs without calling Ollama. When
+the user asks for a selected move's explanation and no local model is running, the
+on-demand endpoint returns:
 
 ```json
 {
@@ -165,9 +168,9 @@ motifs. Flagged moves receive:
 }
 ```
 
-Frontend behavior: selected flagged moves show explanation text when `ok`, a short local
-Ollama setup note when `unavailable`, and a non-blocking retry-style message when
-`error`.
+Frontend behavior: selected flagged moves show a `Generate coach note` button while
+`explanation` is `null`, explanation text when `ok`, a short local Ollama setup note when
+`unavailable`, and a non-blocking retry-style message when `error`.
 
 ## Test Plan
 
@@ -189,9 +192,10 @@ Python unit tests:
 
 API/frontend checks:
 
-- `POST /api/games` remains successful when explanations are disabled.
-- Moves with motifs include non-null explanation status; moves without motifs include
-  `null`.
+- `POST /api/games` remains successful and does not call Ollama when explanations are
+  configured.
+- Moves initially include `explanation: null`; the on-demand endpoint returns a
+  `move-explanation.v1` status object for a selected flagged move.
 - Frontend TypeScript types and current-move panel handle `ok`, `unavailable`, `error`,
   and `null`.
 - Run `make check` and `cd web && npm run typecheck`.

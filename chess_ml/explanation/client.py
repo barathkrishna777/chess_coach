@@ -20,7 +20,7 @@ DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6"
 DEFAULT_CODEX_MODEL = "Codex-opus-4-6"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
-DEFAULT_TIMEOUT_SECONDS = 8.0
+DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
 class ProviderError(RuntimeError):
@@ -182,7 +182,7 @@ class OllamaExplanationClient:
             "think": False,
             "options": {
                 "temperature": 0.2,
-                "num_predict": 220,
+                "num_predict": 120,
             },
         }
         headers = {"content-type": "application/json"}

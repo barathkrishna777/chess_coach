@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from chess_ml.classifier.classify import classify_moves
-from chess_ml.classifier.motifs import AnalyzedMove
+from chess_ml.classifier.motifs import AnalyzedMove, MotifEvidence, MoveRef, PieceRef
 from chess_ml.classifier.motifs import Motif as ClassifiedMotif
 from chess_ml.engine.stockfish import (
     CentipawnScore,
@@ -27,7 +27,7 @@ from chess_ml.engine.stockfish import (
     StockfishUnavailableError,
 )
 from chess_ml.explanation.models import ExplanationRequest, MoveExplanation
-from chess_ml.explanation.service import ExplanationService, explain_many
+from chess_ml.explanation.service import ExplanationService
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, PgnParseError, parse_pgn
 
 router = APIRouter(prefix="/api/games", tags=["games"])
@@ -193,6 +193,14 @@ class AnnotatedMoveModel(BaseModel):
     explanation: MoveExplanationModel | None
 
 
+class ExplainMoveRequest(BaseModel):
+    """Payload for lazily explaining one already analyzed move."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    move: AnnotatedMoveModel
+
+
 class AnalysisSummaryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -242,7 +250,6 @@ async def create_annotated_game(
         return _error_response(503, "stockfish_unavailable", message)
 
     review_lock = cast(asyncio.Lock, request.app.state.review_lock)
-    explanation_service = cast(ExplanationService, request.app.state.explanation_service)
     if review_lock.locked():
         return _error_response(
             429,
@@ -256,7 +263,6 @@ async def create_annotated_game(
             parsed_game,
             pool=pool,
             depth=pool.depth,
-            explanation_service=explanation_service,
         )
     except AnalysisTimeoutError:
         return _error_response(
@@ -277,7 +283,6 @@ async def _annotate_game(
     *,
     pool: StockfishPool,
     depth: int,
-    explanation_service: ExplanationService,
 ) -> AnnotatedGameModel:
     started_at = time.perf_counter()
     unique_fens = _unique_positions(parsed_game)
@@ -294,30 +299,15 @@ async def _annotate_game(
         for move in parsed_game.moves
     ]
     motif_lists = classify_moves(analyzed_moves, initial_fen=parsed_game.initial_fen)
-    explanation_requests = [
-        _explanation_request(
-            move,
-            evaluations[move.fen_before],
-            evaluations[move.fen_after],
-            motifs,
-        )
-        for move, motifs in zip(parsed_game.moves, motif_lists, strict=True)
-    ]
-    explanations = await explain_many(explanation_service, explanation_requests)
     annotated_moves = [
         _annotate_move(
             move,
             evaluations[move.fen_before],
             evaluations[move.fen_after],
             motifs,
-            explanation,
+            None,
         )
-        for move, motifs, explanation in zip(
-            parsed_game.moves,
-            motif_lists,
-            explanations,
-            strict=True,
-        )
+        for move, motifs in zip(parsed_game.moves, motif_lists, strict=True)
     ]
     elapsed_ms = round((time.perf_counter() - started_at) * 1000)
 
@@ -337,6 +327,30 @@ async def _annotate_game(
         ),
         moves=annotated_moves,
     )
+
+
+@router.post("/explain", response_model=MoveExplanationModel)
+async def explain_move(
+    payload: ExplainMoveRequest,
+    request: Request,
+) -> MoveExplanationModel:
+    """Generate a coaching explanation for one selected flagged move."""
+
+    explanation_service = cast(ExplanationService, request.app.state.explanation_service)
+    explanation = await explanation_service.explain(_explanation_request_from_model(payload.move))
+    if explanation is None:
+        explanation = MoveExplanation(
+            status="unavailable",
+            text=None,
+            source=None,
+            provider=None,
+            model=None,
+            reason="api_key_missing",
+        )
+    model = _explanation_model(explanation)
+    if model is None:
+        raise RuntimeError("Explanation model cannot be None for explain endpoint.")
+    return model
 
 
 async def _evaluate_positions(
@@ -439,6 +453,22 @@ def _explanation_request(
     )
 
 
+def _explanation_request_from_model(move: AnnotatedMoveModel) -> ExplanationRequest:
+    return ExplanationRequest(
+        ply=move.ply,
+        move_number=move.move_number,
+        side=move.side,
+        san=move.san,
+        uci=move.uci,
+        fen_before=move.fen_before,
+        fen_after=move.fen_after,
+        analysis_before=_engine_evaluation(move.analysis_before),
+        analysis_after=_engine_evaluation(move.analysis_after),
+        loss_cp=move.loss_cp,
+        motifs=tuple(_classified_motif(motif) for motif in move.motifs),
+    )
+
+
 def _engine_analysis_model(evaluation: EngineEvaluation) -> EngineAnalysisModel:
     return EngineAnalysisModel(
         status=evaluation.status,
@@ -451,12 +481,30 @@ def _engine_analysis_model(evaluation: EngineEvaluation) -> EngineAnalysisModel:
     )
 
 
+def _engine_evaluation(model: EngineAnalysisModel) -> EngineEvaluation:
+    return EngineEvaluation(
+        status=model.status,
+        depth=model.depth,
+        score=_engine_score(model.score),
+        best_move=_engine_move(model.best_move),
+        pv=tuple(_required_engine_move(move) for move in model.pv),
+        nodes=model.nodes,
+        time_ms=model.time_ms,
+    )
+
+
 def _score_model(score: EngineScore) -> ScoreModel:
     if isinstance(score, CentipawnScore):
         return CentipawnScoreModel(type="cp", cp=score.cp)
     if isinstance(score, MateScore):
         return MateScoreModel(type="mate", mate_in=score.mate_in, winner=score.winner)
     raise TypeError(f"Unsupported score type: {type(score).__name__}")
+
+
+def _engine_score(score: ScoreModel) -> EngineScore:
+    if score.type == "cp":
+        return CentipawnScore(cp=score.cp)
+    return MateScore(mate_in=score.mate_in, winner=score.winner)
 
 
 def _move_ref_model(move: EngineMove | None) -> MoveRefModel | None:
@@ -467,6 +515,16 @@ def _move_ref_model(move: EngineMove | None) -> MoveRefModel | None:
 
 def _required_move_ref_model(move: EngineMove) -> MoveRefModel:
     return MoveRefModel(uci=move.uci, san=move.san)
+
+
+def _engine_move(move: MoveRefModel | None) -> EngineMove | None:
+    if move is None:
+        return None
+    return _required_engine_move(move)
+
+
+def _required_engine_move(move: MoveRefModel) -> EngineMove:
+    return EngineMove(uci=move.uci, san=move.san)
 
 
 def _motif_model(motif: ClassifiedMotif) -> MotifModel:
@@ -496,6 +554,41 @@ def _motif_model(motif: ClassifiedMotif) -> MotifModel:
             ),
             opponent_reply=(
                 MoveRefModel(uci=evidence.opponent_reply.uci, san=evidence.opponent_reply.san)
+                if evidence.opponent_reply is not None
+                else None
+            ),
+            related_ply=evidence.related_ply,
+        ),
+    )
+
+
+def _classified_motif(motif: MotifModel) -> ClassifiedMotif:
+    evidence = motif.evidence
+    piece = evidence.piece
+    return ClassifiedMotif(
+        id=motif.id,
+        label=motif.label,
+        severity=motif.severity,
+        source=motif.source,
+        score_cp=motif.score_cp,
+        evidence=MotifEvidence(
+            threshold_cp=evidence.threshold_cp,
+            score_kind=evidence.score_kind,
+            phase=evidence.phase,
+            piece=(
+                PieceRef(color=piece.color, role=piece.role, square=piece.square)
+                if piece is not None
+                else None
+            ),
+            attackers=tuple(evidence.attackers),
+            defenders=tuple(evidence.defenders),
+            best_move=(
+                MoveRef(uci=evidence.best_move.uci, san=evidence.best_move.san)
+                if evidence.best_move is not None
+                else None
+            ),
+            opponent_reply=(
+                MoveRef(uci=evidence.opponent_reply.uci, san=evidence.opponent_reply.san)
                 if evidence.opponent_reply is not None
                 else None
             ),

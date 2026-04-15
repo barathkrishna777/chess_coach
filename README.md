@@ -29,9 +29,10 @@ make serve
 
 Boots the FastAPI backend on http://localhost:8000 and the Next.js frontend on http://localhost:3000. Open the frontend URL to see the chessboard.
 
-Slice 3 explanations default to a local open-source model through Ollama at
-http://localhost:11434. If Ollama or the configured model is not running, review still
-works and flagged moves show a setup note instead of a coaching explanation.
+Slice 3 explanations are generated on demand for a selected flagged move and default to
+a local open-source model through Ollama at http://localhost:11434. If Ollama or the
+configured model is not running, review still works and the coach panel shows a setup
+note instead of blocking PGN analysis.
 
 ## Check
 

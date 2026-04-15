@@ -7,6 +7,7 @@ import Board from "@/components/Board";
 import HealthIndicator from "@/components/HealthIndicator";
 
 const API_URL = "http://localhost:8000/api/games";
+const EXPLAIN_URL = "http://localhost:8000/api/games/explain";
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 type Score =
@@ -127,6 +128,7 @@ export default function Home() {
   const [game, setGame] = useState<AnnotatedGame | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [explainingPly, setExplainingPly] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedMove =
@@ -173,6 +175,36 @@ export default function Home() {
   async function readFile(file: File) {
     setError(null);
     setPgn(await file.text());
+  }
+
+  async function explainSelectedMove() {
+    if (!game || !selectedMove || selectedMove.motifs.length === 0) return;
+
+    setExplainingPly(selectedMove.ply);
+    setError(null);
+    try {
+      const response = await fetch(EXPLAIN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ move: selectedMove }),
+      });
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        throw new Error(errorMessage(body, response.status));
+      }
+
+      const explanation = body as MoveExplanation;
+      setGame({
+        ...game,
+        moves: game.moves.map((move) =>
+          move.ply === selectedMove.ply ? { ...move, explanation } : move,
+        ),
+      });
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setExplainingPly(null);
+    }
   }
 
   return (
@@ -267,7 +299,12 @@ export default function Home() {
                   onSelect={setSelectedIndex}
                   onStart={() => setSelectedIndex(-1)}
                 />
-                <CurrentMovePanel move={selectedMove} game={game} />
+                <CurrentMovePanel
+                  move={selectedMove}
+                  game={game}
+                  isExplaining={selectedMove?.ply === explainingPly}
+                  onExplain={() => void explainSelectedMove()}
+                />
               </div>
             ) : (
               <div className="rounded-md border border-[#d5ddd8] bg-white p-4">
@@ -342,9 +379,13 @@ function MoveList({
 function CurrentMovePanel({
   move,
   game,
+  isExplaining,
+  onExplain,
 }: {
   move: AnnotatedMove | null;
   game: AnnotatedGame;
+  isExplaining: boolean;
+  onExplain: () => void;
 }) {
   if (!move) {
     return (
@@ -390,7 +431,12 @@ function CurrentMovePanel({
         <h3 className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
           Coach
         </h3>
-        <ExplanationText explanation={move.explanation} />
+        <ExplanationText
+          explanation={move.explanation}
+          hasMotifs={move.motifs.length > 0}
+          isExplaining={isExplaining}
+          onExplain={onExplain}
+        />
       </div>
     </section>
   );
@@ -398,14 +444,32 @@ function CurrentMovePanel({
 
 function ExplanationText({
   explanation,
+  hasMotifs,
+  isExplaining,
+  onExplain,
 }: {
   explanation: MoveExplanation | null;
+  hasMotifs: boolean;
+  isExplaining: boolean;
+  onExplain: () => void;
 }) {
-  if (!explanation) {
+  if (!hasMotifs) {
     return (
       <p className="mt-2 text-sm leading-6 text-[#4a5a54]">
         No coaching note for this move.
       </p>
+    );
+  }
+  if (!explanation) {
+    return (
+      <button
+        type="button"
+        onClick={onExplain}
+        disabled={isExplaining}
+        className="mt-2 rounded-md bg-[#37786f] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#2c625a] disabled:cursor-not-allowed disabled:bg-[#a9b6b0]"
+      >
+        {isExplaining ? "Generating..." : "Generate coach note"}
+      </button>
     );
   }
   if (explanation.status === "ok" && explanation.text) {
