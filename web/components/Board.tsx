@@ -45,7 +45,7 @@ export default function Board({
     const config: Config = {
       fen: START_POSITION,
       orientation: "white",
-      viewOnly: true,
+      viewOnly: false,
       turnColor: "white",
       selectable: {
         enabled: false,
