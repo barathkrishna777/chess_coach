@@ -63,13 +63,14 @@ type MoveExplanation = {
   status: "ok" | "unavailable" | "error";
   text: string | null;
   source: "cache" | "llm" | null;
-  provider: "anthropic" | "codex" | null;
+  provider: "anthropic" | "codex" | "ollama" | null;
   model: string | null;
   prompt_version: "grounded-coach.v1";
   reason:
     | "api_key_missing"
     | "provider_error"
     | "invalid_response"
+    | "local_model_unavailable"
     | "timeout"
     | null;
 };
@@ -417,7 +418,8 @@ function ExplanationText({
   if (explanation.status === "unavailable") {
     return (
       <p className="mt-2 text-sm leading-6 text-[#4a5a54]">
-        Add an explanation API key in .env to turn on coaching notes.
+        Start Ollama and pull the local explanation model to turn on coaching
+        notes.
       </p>
     );
   }

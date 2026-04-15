@@ -12,13 +12,14 @@ from chess_ml.ingestion.pgn import Side
 PROMPT_VERSION = "grounded-coach.v1"
 EXPLANATION_SCHEMA_VERSION = "move-explanation.v1"
 
-ExplanationProvider: TypeAlias = Literal["anthropic", "codex"]
+ExplanationProvider: TypeAlias = Literal["anthropic", "codex", "ollama"]
 ExplanationSource: TypeAlias = Literal["cache", "llm"]
 ExplanationStatus: TypeAlias = Literal["ok", "unavailable", "error"]
 ExplanationReason: TypeAlias = Literal[
     "api_key_missing",
     "provider_error",
     "invalid_response",
+    "local_model_unavailable",
     "timeout",
 ]
 

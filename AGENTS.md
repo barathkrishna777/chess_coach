@@ -7,9 +7,9 @@ The canonical long-form plan lives at [docs/plans/001-mvp.md](docs/plans/001-mvp
 ## Hard constraints (non-negotiable)
 
 1. **No image inputs anywhere.** All inputs are plain-text PGN, FEN strings, or direct interaction with the live chessground board. Never add screenshot upload, OCR, computer vision, or any image analysis to this product.
-2. **Explanations never contradict the engine.** The classifier detects motifs; Stockfish produces ground-truth PV and eval; Codex only paraphrases and teaches. Any explanation that contradicts the engine's best line is a bug — fix it, don't ship it.
+2. **Explanations never contradict the engine.** The classifier detects motifs; Stockfish produces ground-truth PV and eval; the LLM only paraphrases and teaches. Any explanation that contradicts the engine's best line is a bug — fix it, don't ship it.
 3. **Reproducible ML.** Every training run has a fixed seed, a checked-in config file, and a recorded eval result. No ad-hoc "I'll re-run it later" experiments.
-4. **Locally runnable end-to-end.** `make serve` must boot the full product. The only external dependency is the Codex API for the explanation layer.
+4. **Locally runnable end-to-end.** `make serve` must boot the full product. Slice 3 explanations default to a local open-source model through Ollama; hosted API providers are optional later.
 5. **Thin vertical slices, not horizontal layers.** Every slice ends with a demoable `make serve` state. No "I'll come back to this later" stubs that break the user-facing flow.
 
 ## Stack (locked decisions — do not re-litigate)
@@ -21,7 +21,7 @@ The canonical long-form plan lives at [docs/plans/001-mvp.md](docs/plans/001-mvp
 - **Stockfish** binary for ground-truth evaluation (installed via `brew install stockfish`).
 - **Maia** (via Lc0) for human-like play — see Slice 5 in the plan.
 - **Next.js (App Router)** + **TypeScript** + **Tailwind** + **chessground** for the frontend.
-- **Codex API** (`Codex-opus-4-6` primary, `Codex-sonnet-4-6` fallback for cheap moves) for explanations, with prompt caching on the system prompt.
+- **Ollama local LLM** (`qwen3:8b` default, configurable) for Slice 3 explanations. Hosted Codex/Anthropic providers remain optional adapters for later quality/cost testing.
 
 ## Local run
 
@@ -60,7 +60,7 @@ chess_ml/
 - **Frontend:** prettier defaults, TypeScript strict mode. No `any` in checked-in code.
 - **Tests:** pytest for Python, playwright for the full end-to-end path (once we have it). Unit tests live next to the module they test (`tests/unit/<module>/`).
 - **Data files:** raw Lichess dumps and trained checkpoints are gitignored. Datasets are stored as parquet.
-- **Secrets:** `ANTHROPIC_API_KEY` via `.env` (gitignored). Never commit keys.
+- **Secrets:** hosted provider keys such as `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, or `OPENAI_API_KEY` go in `.env` (gitignored). Never commit keys.
 - **Commits:** create new commits rather than amending. Small, focused commits preferred over big batches.
 
 ## Model and reasoning guidance for sessions

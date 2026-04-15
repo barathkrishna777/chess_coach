@@ -10,6 +10,8 @@ See [CLAUDE.md](CLAUDE.md) for project conventions and [docs/plans/001-mvp.md](d
 - [uv](https://github.com/astral-sh/uv) for Python
 - Node.js 20+
 - Stockfish: `brew install stockfish`
+- Optional local explanations: [Ollama](https://ollama.com), then
+  `ollama pull qwen3:8b`
 
 ## Setup
 
@@ -26,6 +28,10 @@ make serve
 ```
 
 Boots the FastAPI backend on http://localhost:8000 and the Next.js frontend on http://localhost:3000. Open the frontend URL to see the chessboard.
+
+Slice 3 explanations default to a local open-source model through Ollama at
+http://localhost:11434. If Ollama or the configured model is not running, review still
+works and flagged moves show a setup note instead of a coaching explanation.
 
 ## Check
 

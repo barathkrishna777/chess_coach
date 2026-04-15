@@ -12,6 +12,10 @@ inputs. The implementation uses a provider-adapter design: prompt assembly, cach
 validation, API schema, and tests are provider-independent; the concrete LLM client is
 selected by environment and can be replaced without changing the review contract.
 
+Product decision after initial implementation: explanations are local/open-source first
+for now, using Ollama by default. Hosted API providers remain opt-in adapters for a later
+quality/cost pass.
+
 ## API And Schema
 
 Keep `schema_version: "annotated-game.v1"` and add an always-present nullable
@@ -24,11 +28,12 @@ type MoveExplanation = {
   status: "ok" | "unavailable" | "error";
   text: string | null;
   source: "cache" | "llm" | null;
-  provider: "anthropic" | "codex" | null;
+  provider: "anthropic" | "codex" | "ollama" | null;
   model: string | null;
   prompt_version: "grounded-coach.v1";
   reason:
     | "api_key_missing"
+    | "local_model_unavailable"
     | "provider_error"
     | "invalid_response"
     | "timeout"
@@ -136,13 +141,15 @@ missing-key placeholders.
 Add an `ExplanationClient` protocol and an `ExplanationService` that accepts any client.
 Concrete provider selection comes from env:
 
-- `CHESS_ML_EXPLANATION_PROVIDER=anthropic|codex|disabled`; default is enabled only when
-  a recognized key is present.
-- Recognized keys: `ANTHROPIC_API_KEY` for the existing repo convention, and Codex/OpenAI
-  key name only after validating the exact provider convention.
+- `CHESS_ML_EXPLANATION_PROVIDER=auto|ollama|anthropic|codex|disabled`.
+- Default `auto` uses local Ollama, not a hosted API key.
+- Ollama defaults: `CHESS_ML_OLLAMA_BASE_URL=http://localhost:11434` and
+  `CHESS_ML_OLLAMA_MODEL=qwen3:8b`.
+- Hosted adapters remain opt-in: `ANTHROPIC_API_KEY` for Anthropic and
+  `CODEX_API_KEY`/`OPENAI_API_KEY` for the Codex/OpenAI-compatible path.
 - Load `.env` locally so the documented gitignored key workflow actually works.
 
-If no key is available, `POST /api/games` still returns the full engine review and
+If no local model is running, `POST /api/games` still returns the full engine review and
 motifs. Flagged moves receive:
 
 ```json
@@ -151,15 +158,16 @@ motifs. Flagged moves receive:
   "status": "unavailable",
   "text": null,
   "source": null,
-  "provider": null,
-  "model": null,
+  "provider": "ollama",
+  "model": "qwen3:8b",
   "prompt_version": "grounded-coach.v1",
-  "reason": "api_key_missing"
+  "reason": "local_model_unavailable"
 }
 ```
 
 Frontend behavior: selected flagged moves show explanation text when `ok`, a short local
-setup note when `unavailable`, and a non-blocking retry-style message when `error`.
+Ollama setup note when `unavailable`, and a non-blocking retry-style message when
+`error`.
 
 ## Test Plan
 
@@ -172,7 +180,9 @@ Python unit tests:
 - Cache key is deterministic, changes when PV/prompt version changes, and ignores JSON
   ordering noise.
 - Cache hit returns stored text and does not call the client.
-- Missing API key returns `unavailable` and does not call the client.
+- Missing explicit hosted API key returns `unavailable` and does not call the client.
+- Default provider selection returns an Ollama client, and local Ollama connection/model
+  failures return `unavailable` without failing review.
 - Fake client success is validated, stored, and returned as `ok`.
 - Fake client responses that mention the wrong move, exceed 3 sentences, or return
   malformed JSON become `error` and are not cached.
@@ -194,7 +204,7 @@ API/frontend checks:
   streaming can remain deferred.
 - Default cache DB path `data/chess_ml.sqlite3` is acceptable and can later share the
   Slice 4 profile DB.
-- Provider adapter is the right path, with exact Anthropic/Codex model names and key names
-  validated before expanding concrete network clients.
-- Missing keys should return `unavailable` instead of deterministic fallback coaching
-  text, so the app stays honest and review remains usable.
+- Provider adapter is the right path; local Ollama is the default for now, while hosted
+  API providers remain opt-in for later quality testing.
+- Missing local model or hosted keys should return `unavailable` instead of deterministic
+  fallback coaching text, so the app stays honest and review remains usable.

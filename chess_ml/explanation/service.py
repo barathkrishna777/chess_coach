@@ -6,7 +6,12 @@ import asyncio
 from typing import cast
 
 from chess_ml.explanation.cache import ExplanationCache, cache_key_for_facts
-from chess_ml.explanation.client import ExplanationClient, ProviderError, client_from_env
+from chess_ml.explanation.client import (
+    ExplanationClient,
+    LocalProviderUnavailableError,
+    ProviderError,
+    client_from_env,
+)
 from chess_ml.explanation.models import ExplanationProvider, ExplanationRequest, MoveExplanation
 from chess_ml.explanation.prompt import (
     InvalidExplanationResponseError,
@@ -63,6 +68,15 @@ class ExplanationService:
                 provider=self.client.provider,
                 model=self.client.model,
                 reason="timeout",
+            )
+        except LocalProviderUnavailableError:
+            return MoveExplanation(
+                status="unavailable",
+                text=None,
+                source=None,
+                provider=self.client.provider,
+                model=self.client.model,
+                reason="local_model_unavailable",
             )
         except (ProviderError, OSError, ValueError):
             return MoveExplanation(

@@ -15,7 +15,11 @@ from chess_ml.classifier.classify import classify_moves
 from chess_ml.classifier.motifs import AnalyzedMove
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
 from chess_ml.explanation.cache import ExplanationCache, cache_key_for_facts
-from chess_ml.explanation.client import ClientResponse
+from chess_ml.explanation.client import (
+    ClientResponse,
+    LocalProviderUnavailableError,
+    client_from_env,
+)
 from chess_ml.explanation.models import ExplanationProvider, ExplanationRequest, MoveExplanation
 from chess_ml.explanation.prompt import SYSTEM_PROMPT, build_prompt
 from chess_ml.explanation.service import ExplanationService
@@ -106,6 +110,32 @@ def test_missing_api_key_returns_unavailable(tmp_path: Path) -> None:
     assert explanation.status == "unavailable"
     assert explanation.reason == "api_key_missing"
     assert explanation.text is None
+
+
+def test_auto_provider_defaults_to_ollama(monkeypatch) -> None:
+    monkeypatch.delenv("CHESS_ML_EXPLANATION_PROVIDER", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    client = client_from_env()
+
+    assert client is not None
+    assert client.provider == "ollama"
+
+
+def test_local_provider_unavailable_is_non_fatal(tmp_path: Path) -> None:
+    service = ExplanationService(
+        cache=ExplanationCache(tmp_path / "cache.sqlite3"),
+        client=_UnavailableLocalClient(),
+    )
+
+    explanation = asyncio.run(service.explain(_missed_tactic_request()))
+
+    assert explanation is not None
+    assert explanation.status == "unavailable"
+    assert explanation.provider == "ollama"
+    assert explanation.reason == "local_model_unavailable"
 
 
 def test_cache_hit_skips_client_call(tmp_path: Path) -> None:
@@ -348,3 +378,11 @@ class _FakeClient:
             provider=self.provider,
             model=self.model,
         )
+
+
+class _UnavailableLocalClient:
+    provider: ExplanationProvider = "ollama"
+    model = "fake-local"
+
+    async def complete(self, prompt: object) -> ClientResponse:
+        raise LocalProviderUnavailableError("Ollama is not reachable.")

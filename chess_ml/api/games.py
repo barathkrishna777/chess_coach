@@ -156,7 +156,7 @@ class MoveExplanationModel(BaseModel):
     status: Literal["ok", "unavailable", "error"]
     text: str | None
     source: Literal["cache", "llm"] | None
-    provider: Literal["anthropic", "codex"] | None
+    provider: Literal["anthropic", "codex", "ollama"] | None
     model: str | None
     prompt_version: Literal["grounded-coach.v1"]
     reason: (
@@ -164,6 +164,7 @@ class MoveExplanationModel(BaseModel):
             "api_key_missing",
             "provider_error",
             "invalid_response",
+            "local_model_unavailable",
             "timeout",
         ]
         | None

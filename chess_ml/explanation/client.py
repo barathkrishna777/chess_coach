@@ -16,13 +16,19 @@ from chess_ml.explanation.prompt import BuiltPrompt
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6"
 DEFAULT_CODEX_MODEL = "Codex-opus-4-6"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_TIMEOUT_SECONDS = 8.0
 
 
 class ProviderError(RuntimeError):
     """Raised when an explanation provider request fails."""
+
+
+class LocalProviderUnavailableError(ProviderError):
+    """Raised when the local open-source provider is not reachable or ready."""
 
 
 @dataclass(frozen=True)
@@ -146,6 +152,59 @@ class CodexExplanationClient:
         )
 
 
+class OllamaExplanationClient:
+    """Local open-source explanation adapter backed by Ollama."""
+
+    provider: ExplanationProvider = "ollama"
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        base_url: str | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        self.model = model or os.environ.get("CHESS_ML_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+        self.base_url = (
+            base_url or os.environ.get("CHESS_ML_OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL)
+        ).rstrip("/")
+        self.timeout_seconds = timeout_seconds
+
+    async def complete(self, prompt: BuiltPrompt) -> ClientResponse:
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": prompt.system_prompt},
+                {"role": "user", "content": prompt.user_prompt},
+            ],
+            "stream": False,
+            "format": "json",
+            "think": False,
+            "options": {
+                "temperature": 0.2,
+                "num_predict": 220,
+            },
+        }
+        headers = {"content-type": "application/json"}
+        try:
+            data = await asyncio.to_thread(
+                _post_json,
+                f"{self.base_url}/api/chat",
+                headers,
+                body,
+                self.timeout_seconds,
+            )
+        except ProviderError as exc:
+            raise LocalProviderUnavailableError(str(exc)) from exc
+
+        return ClientResponse(
+            content=_ollama_message_text(data),
+            response_json=data,
+            provider=self.provider,
+            model=self.model,
+        )
+
+
 def client_from_env() -> ExplanationClient | None:
     """Create a provider client from local env, or None when disabled/missing."""
 
@@ -169,12 +228,10 @@ def client_from_env() -> ExplanationClient | None:
             if codex_key
             else None
         )
+    if provider in {"ollama", "auto"}:
+        return OllamaExplanationClient(timeout_seconds=timeout)
     if provider != "auto":
         return None
-    if anthropic_key:
-        return AnthropicExplanationClient(api_key=anthropic_key, timeout_seconds=timeout)
-    if codex_key:
-        return CodexExplanationClient(api_key=codex_key, timeout_seconds=timeout)
     return None
 
 
@@ -266,6 +323,16 @@ def _openai_output_text(response: dict[str, Any]) -> str:
             return "\n".join(parts)
 
     raise ProviderError("Codex response did not include output text.")
+
+
+def _ollama_message_text(response: dict[str, Any]) -> str:
+    message = response.get("message")
+    if not isinstance(message, dict):
+        raise ProviderError("Ollama response did not include a message.")
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ProviderError("Ollama response did not include text content.")
+    return content
 
 
 def _env_float(name: str, default: float) -> float:
