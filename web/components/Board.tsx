@@ -86,10 +86,17 @@ export default function Board({
     const shouldSyncFen = currentFen !== nextFen;
     if (pendingLocalMoveRef.current && shouldSyncFen) {
       api.state.animation.current = undefined;
+      if (lastMove) {
+        api.move(lastMove[0], lastMove[1]);
+      }
+      if (api.getFen() !== nextFen) {
+        syncFenWithoutAnimation(api, nextFen);
+      }
+    } else if (shouldSyncFen) {
+      api.set({ fen: nextFen });
     }
 
     api.set({
-      ...(shouldSyncFen ? { fen: nextFen } : {}),
       orientation,
       turnColor,
       lastMove: lastMove ? [...lastMove] : undefined,
@@ -131,4 +138,10 @@ export default function Board({
 
 function boardFen(fen: string): string {
   return fen.split(" ")[0] ?? fen;
+}
+
+function syncFenWithoutAnimation(api: Api, fen: string): void {
+  const wasEnabled = api.state.animation.enabled;
+  api.set({ animation: { enabled: false }, fen });
+  api.set({ animation: { enabled: wasEnabled } });
 }
