@@ -21,6 +21,24 @@ test("uploads a sample PGN and shows deterministic review motifs", async ({ page
   await expect(page.getByText("Line", { exact: true })).toBeVisible();
 });
 
+test("arrow keys advance through moves on the review screen", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("textbox", { name: "PGN" }).fill(samplePgn);
+  await page.getByRole("button", { name: "Analyze game" }).click();
+
+  await expect(page.getByRole("heading", { name: "1. e4" })).toBeVisible();
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("heading", { name: "1... d5" })).toBeVisible();
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("heading", { name: "2. exd5" })).toBeVisible();
+
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("heading", { name: "1... d5" })).toBeVisible();
+});
+
 test("dashboard loads the seeded demo profile", async ({ page }) => {
   await page.goto("/dashboard");
 

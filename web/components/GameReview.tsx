@@ -1,10 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { Key, KeyPair } from "chessground/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dests, Key, KeyPair } from "chessground/types";
 
 import Board from "@/components/Board";
 import { explainMove, getExplanationStatus, userFacingErrorMessage } from "@/lib/api";
+import {
+  applyUciMoves,
+  legalDestsFromFen,
+  sideToMoveFromFen,
+  uciFromTo,
+  uciToKeyPair,
+} from "@/lib/chess";
 import type {
   AnnotatedGame,
   AnnotatedMove,
@@ -21,12 +28,22 @@ type GameReviewProps = {
   onGameChange: (game: AnnotatedGame) => void;
 };
 
+type TryResult = "correct" | "incorrect";
+
 export default function GameReview({ game, onGameChange }: GameReviewProps) {
   const [selectedIndex, setSelectedIndex] = useState(game.moves.length > 0 ? 0 : -1);
   const [explainingPly, setExplainingPly] = useState<number | null>(null);
   const [coachStatus, setCoachStatus] = useState<ExplanationStatus | null>(null);
   const [coachStatusError, setCoachStatusError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // PV mode: null = off, 0..N = current step index into pvData.fens
+  const [pvStep, setPvStep] = useState<number | null>(null);
+  // Try mode
+  const [tryMode, setTryMode] = useState(false);
+  const [tryResult, setTryResult] = useState<TryResult | null>(null);
+
+  const pvMode = pvStep !== null;
 
   useEffect(() => {
     let cancelled = false;
@@ -52,14 +69,140 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
     setError(null);
   }, [game.game_id, game.moves.length]);
 
-  const selectedMove =
-    selectedIndex >= 0 ? game.moves[selectedIndex] ?? null : null;
-  const boardFen = selectedMove?.fen_after ?? game.initial_fen;
+  // Exit interactive modes when selection changes
+  useEffect(() => {
+    setPvStep(null);
+    setTryMode(false);
+    setTryResult(null);
+  }, [selectedIndex]);
+
+  const selectedMove = selectedIndex >= 0 ? (game.moves[selectedIndex] ?? null) : null;
+
+  // Compute PV positions (fen_before + each PV move applied)
+  const pvData = useMemo(() => {
+    if (!selectedMove) return null;
+    const ucis = selectedMove.analysis_before.pv.map((m) => m.uci);
+    if (ucis.length === 0) return null;
+    const fens = applyUciMoves(selectedMove.fen_before, ucis);
+    return { ucis, fens };
+  }, [selectedMove]);
+
+  // Try mode: legal dests computed from fen_before when try mode is active
+  const tryLegalDests = useMemo<Dests | undefined>(() => {
+    if (!tryMode || !selectedMove) return undefined;
+    return legalDestsFromFen(selectedMove.fen_before);
+  }, [tryMode, selectedMove]);
+
+  // Keyboard navigation
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
+  const pvStepRef = useRef(pvStep);
+  pvStepRef.current = pvStep;
+  const pvDataRef = useRef(pvData);
+  pvDataRef.current = pvData;
+  const tryModeRef = useRef(tryMode);
+  tryModeRef.current = tryMode;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+
+      const step = pvStepRef.current;
+      const inPv = step !== null;
+      const data = pvDataRef.current;
+
+      if (inPv) {
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          setPvStep((s) => (s !== null ? Math.max(0, s - 1) : null));
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          if (data) {
+            setPvStep((s) => (s !== null ? Math.min(data.fens.length - 1, s + 1) : null));
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setPvStep(null);
+        }
+        return;
+      }
+
+      if (tryModeRef.current) return;
+
+      const moves = game.moves;
+      const idx = selectedIndexRef.current;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.max(0, i - 1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setSelectedIndex((i) => {
+          if (moves.length === 0) return -1;
+          return i >= moves.length - 1 ? 0 : i + 1;
+        });
+      } else if (e.key === "ArrowUp") {
+        const prev = findPrevFlagged(moves, idx);
+        if (prev !== -1) {
+          e.preventDefault();
+          setSelectedIndex(prev);
+        }
+      } else if (e.key === "ArrowDown") {
+        const next = findNextFlagged(moves, idx);
+        if (next !== -1) {
+          e.preventDefault();
+          setSelectedIndex(next);
+        }
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [game.moves]);
+
+  // Board state depending on mode
+  let boardFen: string;
+  let boardLastMove: KeyPair | null;
+  let boardOnMove: ((from: Key, to: Key) => void) | undefined;
+  let boardLegalDests: Dests | undefined;
+  let boardTurnColor: "white" | "black" | undefined;
+  let boardMovableColor: "white" | "black" | undefined;
+
+  if (pvMode && pvData) {
+    const step = pvStep ?? 1;
+    boardFen = pvData.fens[step] ?? selectedMove?.fen_before ?? game.initial_fen;
+    const prevUci = step > 0 ? pvData.ucis[step - 1] : null;
+    boardLastMove = prevUci ? uciToKeyPair(prevUci) : null;
+  } else if (tryMode && selectedMove) {
+    boardFen = selectedMove.fen_before;
+    boardLastMove = null;
+    if (!tryResult) {
+      boardLegalDests = tryLegalDests;
+      boardTurnColor = sideToMoveFromFen(selectedMove.fen_before);
+      boardMovableColor = sideToMoveFromFen(selectedMove.fen_before);
+      boardOnMove = (from, to) => {
+        const played = from + to;
+        const best = selectedMove.analysis_before.best_move?.uci;
+        const correct = best !== undefined && uciFromTo(best) === played;
+        setTryResult(correct ? "correct" : "incorrect");
+      };
+    }
+  } else {
+    boardFen = selectedMove?.fen_after ?? game.initial_fen;
+    boardLastMove = selectedMove ? lastMoveKeys(selectedMove) : null;
+  }
+
   const currentScore =
     selectedMove?.analysis_after.score ??
     game.moves[0]?.analysis_before.score ??
     ({ type: "cp", cp: 0 } satisfies Score);
-  const lastMove = selectedMove ? lastMoveKeys(selectedMove) : null;
 
   async function explainSelectedMove() {
     if (!selectedMove || selectedMove.motifs.length === 0) return;
@@ -86,11 +229,100 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
 
   return (
     <section className="grid gap-6 lg:grid-cols-[minmax(360px,560px)_minmax(320px,1fr)] lg:items-start">
-      <div className="flex gap-3">
-        <EvalBar score={currentScore} />
-        <div className="w-full max-w-[560px]">
-          <Board fen={boardFen} lastMove={lastMove} />
+      <div className="flex flex-col gap-2">
+        <div className="flex gap-3">
+          <EvalBar score={currentScore} />
+          <div className="w-full max-w-[560px]">
+            <Board
+              fen={boardFen}
+              lastMove={boardLastMove}
+              onMove={boardOnMove}
+              legalDests={boardLegalDests}
+              turnColor={boardTurnColor ?? "white"}
+              movableColor={boardMovableColor}
+            />
+          </div>
         </div>
+
+        {/* PV navigation bar */}
+        {pvMode && pvData ? (
+          <div className="flex items-center gap-2 rounded-md border border-[#c2d8d0] bg-[#edf4f1] px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setPvStep((s) => (s !== null ? Math.max(0, s - 1) : null))}
+              disabled={(pvStep ?? 0) === 0}
+              className="rounded px-2 py-1 text-sm font-semibold text-[#2c625a] disabled:opacity-30 hover:bg-[#d5ece5]"
+              title="Previous (←)"
+            >
+              ←
+            </button>
+            <span className="flex-1 text-center text-xs text-[#4a5a54]">
+              Best line — step {pvStep ?? 0} of {pvData.fens.length - 1}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setPvStep((s) =>
+                  s !== null ? Math.min(pvData.fens.length - 1, s + 1) : null,
+                )
+              }
+              disabled={(pvStep ?? 0) >= pvData.fens.length - 1}
+              className="rounded px-2 py-1 text-sm font-semibold text-[#2c625a] disabled:opacity-30 hover:bg-[#d5ece5]"
+              title="Next (→)"
+            >
+              →
+            </button>
+            <button
+              type="button"
+              onClick={() => setPvStep(null)}
+              className="rounded px-2 py-1 text-xs font-medium text-[#4a5a54] hover:bg-[#d5ece5]"
+              title="Exit (Esc)"
+            >
+              ✕ Back to game
+            </button>
+          </div>
+        ) : null}
+
+        {/* Try mode bar */}
+        {tryMode && selectedMove ? (
+          <div
+            className={`flex items-center gap-3 rounded-md border px-3 py-2 ${
+              tryResult === "correct"
+                ? "border-[#37786f] bg-[#edf4f1]"
+                : tryResult === "incorrect"
+                  ? "border-[#e28a82] bg-[#ffe4df]"
+                  : "border-[#c2d8d0] bg-[#edf4f1]"
+            }`}
+          >
+            {tryResult === null ? (
+              <span className="flex-1 text-xs text-[#4a5a54]">
+                Find the best move from this position (you are{" "}
+                {sideToMoveFromFen(selectedMove.fen_before)}).
+              </span>
+            ) : tryResult === "correct" ? (
+              <span className="flex-1 text-xs font-semibold text-[#2c625a]">
+                Correct! That&apos;s the engine&apos;s best move.
+              </span>
+            ) : (
+              <span className="flex-1 text-xs text-[#912f28]">
+                Not quite.{" "}
+                {selectedMove.analysis_before.best_move
+                  ? `The engine played ${selectedMove.analysis_before.best_move.san}.`
+                  : "The engine found a better move."}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setTryMode(false);
+                setTryResult(null);
+              }}
+              className="rounded px-2 py-1 text-xs font-medium text-[#4a5a54] hover:bg-[#d5ece5]"
+            >
+              ✕ Back to review
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-5">
@@ -103,6 +335,9 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
             {error}
           </p>
         ) : null}
+
+        <ReviewSummary moves={game.moves} />
+
         <div className="grid gap-5 xl:grid-cols-[minmax(260px,1fr)_minmax(260px,0.9fr)]">
           <MoveList
             moves={game.moves}
@@ -116,13 +351,107 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
             coachStatus={coachStatus}
             coachStatusError={coachStatusError}
             isExplaining={selectedMove?.ply === explainingPly}
+            pvData={pvData}
+            pvMode={pvMode}
+            tryMode={tryMode}
             onExplain={() => void explainSelectedMove()}
+            onShowBestLine={() => setPvStep(1)}
+            onTryEnginesMove={() => {
+              setPvStep(null);
+              setTryMode(true);
+              setTryResult(null);
+            }}
           />
         </div>
+
+        <p className="text-xs text-[#8aa79c]">
+          Keyboard: ← → to step moves · ↑ ↓ to jump between flagged moves
+        </p>
       </div>
     </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Review summary card
+// ---------------------------------------------------------------------------
+
+function ReviewSummary({ moves }: { moves: AnnotatedMove[] }) {
+  const summary = useMemo(() => {
+    if (moves.length === 0) return null;
+
+    const accuracy = Math.round(
+      (moves.filter((m) => (m.loss_cp ?? 0) < 50).length / moves.length) * 100,
+    );
+
+    const top2Blunders = moves
+      .filter((m) => m.motifs.length > 0 && m.loss_cp !== null)
+      .sort((a, b) => (b.loss_cp ?? 0) - (a.loss_cp ?? 0))
+      .slice(0, 2);
+
+    const motifCounts = new Map<string, { label: string; count: number }>();
+    for (const move of moves) {
+      for (const motif of move.motifs) {
+        const entry = motifCounts.get(motif.id) ?? { label: motif.label, count: 0 };
+        entry.count += 1;
+        motifCounts.set(motif.id, entry);
+      }
+    }
+    const topMotif = [...motifCounts.values()].sort((a, b) => b.count - a.count)[0] ?? null;
+
+    return { accuracy, top2Blunders, topMotif };
+  }, [moves]);
+
+  if (!summary) return null;
+
+  return (
+    <div className="rounded-md border border-[#d5ddd8] bg-white px-4 py-3">
+      <h2 className="text-sm font-semibold">Review summary</h2>
+      <div className="mt-3 flex flex-wrap gap-5 text-sm">
+        <div>
+          <p className="text-xs text-[#65766f]">Accuracy</p>
+          <p
+            className={`mt-0.5 text-lg font-semibold ${
+              summary.accuracy >= 80
+                ? "text-[#37786f]"
+                : summary.accuracy >= 60
+                  ? "text-[#9a6b16]"
+                  : "text-[#bd4138]"
+            }`}
+          >
+            {summary.accuracy}%
+          </p>
+        </div>
+        {summary.topMotif ? (
+          <div>
+            <p className="text-xs text-[#65766f]">Most common mistake</p>
+            <p className="mt-0.5 font-medium text-[#17201d]">{summary.topMotif.label}</p>
+            <p className="text-xs text-[#65766f]">{summary.topMotif.count}×</p>
+          </div>
+        ) : null}
+        {summary.top2Blunders.length > 0 ? (
+          <div className="min-w-0">
+            <p className="text-xs text-[#65766f]">Biggest mistakes</p>
+            {summary.top2Blunders.map((move) => (
+              <p key={move.ply} className="mt-0.5 text-xs text-[#17201d]">
+                <span className="font-mono text-[#65766f]">
+                  {move.move_number}
+                  {move.side === "white" ? "." : "..."}{" "}
+                </span>
+                {move.san}
+                <span className="ml-1 text-[#bd4138]">({lossLabel(move.loss_cp)})</span>
+              </p>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Move list
+// ---------------------------------------------------------------------------
 
 function MoveList({
   moves,
@@ -180,20 +509,34 @@ function MoveList({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Current move panel
+// ---------------------------------------------------------------------------
+
 function CurrentMovePanel({
   move,
   game,
   coachStatus,
   coachStatusError,
   isExplaining,
+  pvData,
+  pvMode,
+  tryMode,
   onExplain,
+  onShowBestLine,
+  onTryEnginesMove,
 }: {
   move: AnnotatedMove | null;
   game: AnnotatedGame;
   coachStatus: ExplanationStatus | null;
   coachStatusError: string | null;
   isExplaining: boolean;
+  pvData: { ucis: string[]; fens: string[] } | null;
+  pvMode: boolean;
+  tryMode: boolean;
   onExplain: () => void;
+  onShowBestLine: () => void;
+  onTryEnginesMove: () => void;
 }) {
   if (!move) {
     return (
@@ -205,6 +548,9 @@ function CurrentMovePanel({
       </section>
     );
   }
+
+  const hasBestLine = pvData !== null && pvData.ucis.length > 0;
+  const hasBestMove = move.analysis_before.best_move !== null;
 
   return (
     <section className="rounded-md border border-[#d5ddd8] bg-white p-4">
@@ -225,16 +571,47 @@ function CurrentMovePanel({
           value={move.analysis_before.pv.map((pvMove) => pvMove.san).join(" ") || "None"}
         />
       </dl>
+
+      {/* Explore buttons */}
+      {(hasBestLine || hasBestMove) && !pvMode && !tryMode ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {hasBestLine ? (
+            <button
+              type="button"
+              onClick={onShowBestLine}
+              className="rounded-md border border-[#37786f] px-3 py-1.5 text-xs font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
+            >
+              Show best line
+            </button>
+          ) : null}
+          {hasBestMove ? (
+            <button
+              type="button"
+              onClick={onTryEnginesMove}
+              className="rounded-md border border-[#37786f] px-3 py-1.5 text-xs font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
+            >
+              Try engine&apos;s move
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Motifs */}
       <div className="mt-4 border-t border-[#e3e9e5] pt-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
           Motifs
         </h3>
         {move.motifs.length > 0 ? (
-          <MotifChips motifs={move.motifs} />
+          <>
+            <MotifChips motifs={move.motifs} />
+            <MotifEvidenceList motifs={move.motifs} />
+          </>
         ) : (
           <p className="mt-2 text-sm text-[#4a5a54]">No motif detected.</p>
         )}
       </div>
+
+      {/* Coach note */}
       <div className="mt-4 border-t border-[#e3e9e5] pt-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
           Coach
@@ -251,6 +628,58 @@ function CurrentMovePanel({
     </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Motif evidence details
+// ---------------------------------------------------------------------------
+
+function MotifEvidenceList({ motifs }: { motifs: Motif[] }) {
+  const evidenced = motifs.filter(
+    (m) =>
+      m.evidence.piece !== null ||
+      m.evidence.attackers.length > 0 ||
+      m.evidence.defenders.length > 0 ||
+      m.evidence.opponent_reply !== null,
+  );
+  if (evidenced.length === 0) return null;
+
+  return (
+    <ul className="mt-2 grid gap-1.5">
+      {evidenced.map((motif) => (
+        <li key={motif.id} className="text-xs leading-5 text-[#4a5a54]">
+          {motifEvidenceSentence(motif)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function motifEvidenceSentence(motif: Motif): string {
+  const { piece, attackers, defenders, opponent_reply, phase } = motif.evidence;
+  const parts: string[] = [];
+
+  if (piece) {
+    const role = piece.role.charAt(0).toUpperCase() + piece.role.slice(1);
+    parts.push(`${role} on ${piece.square}`);
+  }
+  if (attackers.length > 0) {
+    parts.push(`attacked from ${attackers.join(", ")}`);
+  }
+  if (defenders.length > 0) {
+    parts.push(`defended from ${defenders.join(", ")}`);
+  } else if (attackers.length > 0) {
+    parts.push("undefended");
+  }
+  if (opponent_reply) {
+    parts.push(`opponent replied ${opponent_reply.san}`);
+  }
+  const phaseTag = phase !== "middlegame" ? ` (${phase})` : "";
+  return parts.length > 0 ? parts.join(", ") + phaseTag + "." : "";
+}
+
+// ---------------------------------------------------------------------------
+// Explanation text
+// ---------------------------------------------------------------------------
 
 function ExplanationText({
   explanation,
@@ -280,8 +709,8 @@ function ExplanationText({
     return (
       <div className="mt-2 grid gap-2">
         <p className="text-sm leading-6 text-[#17201d]">
-          Generating a grounded coach note from the Stockfish line. This can take
-          a little while locally.
+          Generating a grounded coach note from the Stockfish line. This can take a little
+          while locally.
         </p>
         <p className="text-xs leading-5 text-[#65766f]">{configText}</p>
         <button
@@ -297,9 +726,7 @@ function ExplanationText({
   if (!explanation) {
     return (
       <div className="mt-2 grid gap-2">
-        <p className="text-sm leading-6 text-[#4a5a54]">
-          No coach note requested yet.
-        </p>
+        <p className="text-sm leading-6 text-[#4a5a54]">No coach note requested yet.</p>
         <p className="text-xs leading-5 text-[#65766f]">{configText}</p>
         {requestBlocked ? (
           <p className="text-sm leading-6 text-[#912f28]">
@@ -385,6 +812,10 @@ function RetryableCoachMessage({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Small helpers / pure components
+// ---------------------------------------------------------------------------
+
 function coachConfigText(
   status: ExplanationStatus | null,
   statusError: string | null,
@@ -393,9 +824,7 @@ function coachConfigText(
   if (!status) return "Checking local coach config.";
   const timeout = `${trimSeconds(status.timeout_seconds)}s budget`;
   if (!status.enabled) return `Coach notes are disabled, ${timeout}.`;
-  if (!status.configured) {
-    return `Coach provider is not configured, ${timeout}.`;
-  }
+  if (!status.configured) return `Coach provider is not configured, ${timeout}.`;
   return `${providerModelLabel(status.provider, status.model)}, ${timeout}.`;
 }
 
@@ -573,4 +1002,18 @@ function lastMoveKeys(move: AnnotatedMove): KeyPair | null {
 
 function squareKey(square: string): Key | null {
   return /^[a-h][1-8]$/.test(square) ? (square as Key) : null;
+}
+
+function findNextFlagged(moves: AnnotatedMove[], currentIndex: number): number {
+  for (let i = currentIndex + 1; i < moves.length; i++) {
+    if ((moves[i]?.motifs.length ?? 0) > 0) return i;
+  }
+  return -1;
+}
+
+function findPrevFlagged(moves: AnnotatedMove[], currentIndex: number): number {
+  for (let i = currentIndex - 1; i >= 0; i--) {
+    if ((moves[i]?.motifs.length ?? 0) > 0) return i;
+  }
+  return -1;
 }
