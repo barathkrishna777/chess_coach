@@ -49,7 +49,7 @@ Configuration:
 - `CHESS_ML_EXPLANATION_TIMEOUT_SECONDS`: provider timeout budget. Default `15`.
 - `CHESS_ML_OLLAMA_BASE_URL`: local Ollama base URL. Default `http://localhost:11434`.
 - `CHESS_ML_OLLAMA_MODEL`: local model name. Default `qwen3:8b`.
-- `CHESS_ML_DB_PATH`: SQLite path for the explanation cache. Default
+- `CHESS_ML_DB_PATH`: SQLite path for the explanation cache and local profile store. Default
   `data/chess_ml.sqlite3`.
 
 For local explanations:
@@ -69,4 +69,7 @@ Runs ruff, mypy, and pytest. Must pass before any commit.
 
 ## Status
 
-Slice 0 (scaffold) — in progress. See [docs/plans/001-mvp.md](docs/plans/001-mvp.md).
+Slices 0-6 are implemented through the local profile dashboard. Current app supports
+PGN review, Stockfish analysis, heuristic motifs, lazy grounded coach notes, local play
+against low-strength Stockfish, post-game review, and `/dashboard` profile aggregation.
+See [docs/plans/001-mvp.md](docs/plans/001-mvp.md) for the updated slice map.

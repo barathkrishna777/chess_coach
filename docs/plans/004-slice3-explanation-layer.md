@@ -211,7 +211,7 @@ API/frontend checks:
 - Synchronous explanations inside `POST /api/games` are acceptable for this slice;
   streaming can remain deferred.
 - Default cache DB path `data/chess_ml.sqlite3` is acceptable and can later share the
-  Slice 4 profile DB.
+  Slice 6 profile DB.
 - Provider adapter is the right path; local Ollama is the default for now, while hosted
   API providers remain opt-in for later quality testing.
 - Missing local model or hosted keys should return `unavailable` instead of deterministic

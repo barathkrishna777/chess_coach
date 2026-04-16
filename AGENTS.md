@@ -19,7 +19,7 @@ The canonical long-form plan lives at [docs/plans/001-mvp.md](docs/plans/001-mvp
 - **FastAPI** for the HTTP API, **SQLite** for the profile store (MVP).
 - **python-chess** for PGN parsing and board state.
 - **Stockfish** binary for ground-truth evaluation (installed via `brew install stockfish`).
-- **Maia** (via Lc0) for human-like play — see Slice 5 in the plan.
+- **Maia** (via Lc0) for human-like play — see Slice 7 in the plan.
 - **Next.js (App Router)** + **TypeScript** + **Tailwind** + **chessground** for the frontend.
 - **Ollama local LLM** (`qwen3:8b` default, configurable) for Slice 3 explanations. Hosted Codex/Anthropic providers remain optional adapters for later quality/cost testing.
 
@@ -28,9 +28,9 @@ The canonical long-form plan lives at [docs/plans/001-mvp.md](docs/plans/001-mvp
 - `make setup` — one-time: install Python deps via uv, install npm deps, fetch any required weights.
 - `make check` — ruff + mypy + pytest. Must pass before declaring any task done.
 - `make serve` — boots FastAPI (port 8000) and Next.js dev (port 3000). Open http://localhost:3000.
-- `make ingest` — downloads a Lichess slice and builds the processed dataset (Slice 6).
-- `make train` — trains the weakness classifier (Slice 6).
-- `make demo` — seeds the DB with sample games so the product is immediately usable on a fresh clone (Slice 7).
+- `make ingest` — downloads a Lichess slice and builds the processed dataset (Slice 8).
+- `make train` — trains the weakness classifier (Slice 8).
+- `make demo` — seeds the DB with sample games so the product is immediately usable on a fresh clone (Slice 9).
 
 ## Directory layout
 
@@ -65,7 +65,7 @@ chess_ml/
 
 ## Model and reasoning guidance for sessions
 
-- Use **Opus 4.6** for planning, architecture design, prompt engineering (Slice 3), classifier design (Slice 6), and hard debugging.
+- Use **Opus 4.6** for planning, architecture design, prompt engineering (Slice 3), classifier design (Slice 8), and hard debugging.
 - Use **Sonnet 4.6** for bulk implementation of well-defined slices where the plan is already clear.
 - When in plan mode, always commit the resulting plan to `docs/plans/NNN-xxx.md` before implementing against it.
 - Run `make check` before marking any task complete. "It compiles" is not "it works."
@@ -82,7 +82,7 @@ chess_ml/
 ## What NOT to do
 
 - Do not add image upload, OCR, or computer vision anywhere. (See hard constraint 1.)
-- Do not train a large from-scratch model as part of MVP. The Slice 6 classifier is deliberately small (~1–5M params).
+- Do not train a large from-scratch model as part of MVP. The Slice 8 classifier is deliberately small (~1–5M params).
 - Do not skip `make check` to "save time." A broken main branch stops everything.
 - Do not generate explanations without passing through the grounding pipeline (FEN + engine PV + motif).
 - Do not add cloud deployment, auth, payments, or sharing until MVP is demoable locally.
