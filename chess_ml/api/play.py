@@ -17,8 +17,14 @@ from chess_ml.engine.opponent import (
     RequestedOpponent,
     SelectedOpponent,
 )
-from chess_ml.engine.stockfish import StockfishProtocolError, StockfishUnavailableError
+from chess_ml.engine.stockfish import (
+    EngineMove,
+    StockfishPool,
+    StockfishProtocolError,
+    StockfishUnavailableError,
+)
 from chess_ml.play.session import (
+    HintUnavailableError,
     IllegalMoveError,
     InMemoryPlayStore,
     LegalMoveGroup,
@@ -26,6 +32,8 @@ from chess_ml.play.session import (
     PlayGameNotFoundError,
     PlayMove,
     PlayState,
+    Side,
+    TakebackUnavailableError,
 )
 
 router = APIRouter(prefix="/api/play", tags=["play"])
@@ -89,14 +97,29 @@ class PlayStateModel(BaseModel):
     schema_version: Literal["play-state.v1"]
     game_id: str
     opponent: PlayOpponentModel
+    user_color: Literal["white", "black"]
     status: Literal["active", "completed", "resigned"]
     result: Literal["1-0", "0-1", "1/2-1/2", "*"]
     fen: str
-    orientation: Literal["white"]
+    orientation: Literal["white", "black"]
     legal_moves: list[LegalMoveGroupModel]
     moves: list[PlayMoveModel]
     bot_move: MoveRefModel | None
+    hints_remaining: int
+    takebacks_remaining: int
     pgn: str | None
+
+
+class PlayHintModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["play-hint.v1"]
+    game_id: str
+    best_move: MoveRefModel
+    from_square: str
+    to_square: str
+    promotion: Literal["q", "r", "b", "n"] | None
+    hints_remaining: int
 
 
 class NewGameRequest(BaseModel):
@@ -104,6 +127,7 @@ class NewGameRequest(BaseModel):
 
     opponent: Literal["auto", "maia", "stockfish"] = "auto"
     maia_rating: Literal[1100, 1500, 1900] = DEFAULT_MAIA_RATING
+    user_color: Literal["white", "black"] = "white"
 
 
 class SubmitMoveRequest(BaseModel):
@@ -114,6 +138,12 @@ class SubmitMoveRequest(BaseModel):
 
 
 class ResignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+
+
+class TakebackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     game_id: str
@@ -147,10 +177,11 @@ async def new_game(
     request: Request,
     payload: NewGameRequest | None = NEW_GAME_BODY,
 ) -> PlayStateModel | JSONResponse:
-    """Start a new white-only play session."""
+    """Start a new local play session."""
 
     requested = payload.opponent if payload is not None else "auto"
     rating = _maia_rating(payload.maia_rating if payload is not None else DEFAULT_MAIA_RATING)
+    user_color: Side = payload.user_color if payload is not None else "white"
 
     try:
         selected = await _select_opponent(request, requested=requested, maia_rating=rating)
@@ -158,8 +189,15 @@ async def new_game(
         return _error_response(503, "opponent_unavailable", str(exc))
 
     store = _store(request)
-    session = store.create(opponent=selected.info, opponent_provider=selected.provider)
-    return _state_model(session.state(bot_move=None))
+    session = store.create(
+        opponent=selected.info,
+        opponent_provider=selected.provider,
+        user_color=user_color,
+    )
+    try:
+        return _state_model(await session.start())
+    except (StockfishUnavailableError, StockfishProtocolError) as exc:
+        return _error_response(503, "opponent_unavailable", str(exc))
 
 
 @router.get("/opponents", response_model=PlayOpponentStatusModel)
@@ -237,11 +275,91 @@ async def resign(
     return _state_model(state)
 
 
+@router.post("/takeback", response_model=PlayStateModel)
+async def takeback(
+    payload: TakebackRequest,
+    request: Request,
+) -> PlayStateModel | JSONResponse:
+    """Undo the latest user move and bot reply if a takeback is available."""
+
+    try:
+        session = _store(request).get(payload.game_id)
+        state = await session.takeback()
+    except PlayGameNotFoundError:
+        return _error_response(
+            404,
+            "game_not_found",
+            "That play session no longer exists. Start a new game.",
+        )
+    except PlayGameFinishedError:
+        return _error_response(
+            409,
+            "takeback_unavailable",
+            "Takeback is only available while the game is in progress.",
+        )
+    except TakebackUnavailableError as exc:
+        return _error_response(409, "takeback_unavailable", str(exc))
+    except IllegalMoveError as exc:
+        return _error_response(409, "takeback_unavailable", str(exc))
+
+    return _state_model(state)
+
+
+@router.get("/hint", response_model=PlayHintModel)
+async def hint(
+    session_id: str,
+    request: Request,
+) -> PlayHintModel | JSONResponse:
+    """Return one Stockfish best-move hint for the current user turn."""
+
+    try:
+        session = _store(request).get(session_id)
+    except PlayGameNotFoundError:
+        return _error_response(
+            404,
+            "game_not_found",
+            "That play session no longer exists. Start a new game.",
+        )
+
+    pool = _stockfish_pool(request)
+    if pool is None:
+        message = str(getattr(request.app.state, "stockfish_error", "Stockfish is unavailable."))
+        return _error_response(503, "stockfish_unavailable", message)
+
+    try:
+        fen = await session.hint_fen()
+        evaluation = await pool.evaluate(fen, depth=14)
+        if evaluation.best_move is None:
+            return _error_response(
+                409,
+                "hint_unavailable",
+                "No legal hint is available in the current position.",
+            )
+        hints_remaining = await session.record_hint_used(fen)
+    except PlayGameFinishedError:
+        return _error_response(
+            409,
+            "hint_unavailable",
+            "Hints are only available while the game is in progress.",
+        )
+    except HintUnavailableError as exc:
+        return _error_response(409, "hint_unavailable", str(exc))
+    except (StockfishUnavailableError, StockfishProtocolError) as exc:
+        return _error_response(503, "stockfish_unavailable", str(exc))
+
+    return _hint_model(
+        game_id=session.game_id,
+        move=evaluation.best_move,
+        hints_remaining=hints_remaining,
+    )
+
+
 def _state_model(state: PlayState) -> PlayStateModel:
     return PlayStateModel(
         schema_version="play-state.v1",
         game_id=state.game_id,
         opponent=_opponent_model(state.opponent),
+        user_color=state.user_color,
         status=state.status,
         result=state.result,
         fen=state.fen,
@@ -249,6 +367,8 @@ def _state_model(state: PlayState) -> PlayStateModel:
         legal_moves=[_legal_move_group_model(group) for group in state.legal_moves],
         moves=[_play_move_model(move) for move in state.moves],
         bot_move=_move_ref_model(state.bot_move),
+        hints_remaining=state.hints_remaining,
+        takebacks_remaining=state.takebacks_remaining,
         pgn=state.pgn,
     )
 
@@ -287,8 +407,29 @@ def _move_ref_model(move: PlayMove | None) -> MoveRefModel | None:
     return MoveRefModel(uci=move.uci, san=move.san)
 
 
+def _hint_model(*, game_id: str, move: EngineMove, hints_remaining: int) -> PlayHintModel:
+    uci = move.uci
+    san = move.san
+    promotion = uci[4] if len(uci) == 5 else None
+    if promotion not in {"q", "r", "b", "n"}:
+        promotion = None
+    return PlayHintModel(
+        schema_version="play-hint.v1",
+        game_id=game_id,
+        best_move=MoveRefModel(uci=uci, san=san),
+        from_square=uci[:2],
+        to_square=uci[2:4],
+        promotion=cast(Literal["q", "r", "b", "n"] | None, promotion),
+        hints_remaining=hints_remaining,
+    )
+
+
 def _store(request: Request) -> InMemoryPlayStore:
     return cast(InMemoryPlayStore, request.app.state.play_store)
+
+
+def _stockfish_pool(request: Request) -> StockfishPool | None:
+    return cast(StockfishPool | None, getattr(request.app.state, "stockfish_pool", None))
 
 
 async def _select_opponent(

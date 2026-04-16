@@ -125,6 +125,7 @@ export type PlayMove = {
 };
 
 export type PlayOpponentRequest = "auto" | "maia" | "stockfish";
+export type PlayColor = "white" | "black";
 export type MaiaRating = 1100 | 1500 | 1900;
 
 export type PlayOpponent = {
@@ -169,14 +170,27 @@ export type PlayState = {
   schema_version: "play-state.v1";
   game_id: string;
   opponent: PlayOpponent;
+  user_color: PlayColor;
   status: "active" | "completed" | "resigned";
   result: "1-0" | "0-1" | "1/2-1/2" | "*";
   fen: string;
-  orientation: "white";
+  orientation: PlayColor;
   legal_moves: LegalMoveGroup[];
   moves: PlayMove[];
   bot_move: EngineMove | null;
+  hints_remaining: number;
+  takebacks_remaining: number;
   pgn: string | null;
+};
+
+export type PlayHint = {
+  schema_version: "play-hint.v1";
+  game_id: string;
+  best_move: EngineMove;
+  from_square: string;
+  to_square: string;
+  promotion: PromotionChoice | null;
+  hints_remaining: number;
 };
 
 export type ProfileDashboard = {

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { Chessground } from "chessground";
 import type { Api } from "chessground/api";
 import type { Config } from "chessground/config";
+import type { DrawShape } from "chessground/draw";
 import type { Color, Dests, Key, KeyPair } from "chessground/types";
 
 type BoardProps = {
@@ -13,6 +14,7 @@ type BoardProps = {
   turnColor?: Color;
   movableColor?: Color;
   legalDests?: Dests;
+  shapes?: DrawShape[];
   disabled?: boolean;
   testId?: string;
   onMove?: (from: Key, to: Key) => void;
@@ -25,6 +27,7 @@ export default function Board({
   turnColor = "white",
   movableColor = "white",
   legalDests,
+  shapes,
   disabled = false,
   testId = "chess-board",
   onMove,
@@ -70,6 +73,12 @@ export default function Board({
       },
       highlight: {
         lastMove: true,
+      },
+      drawable: {
+        enabled: false,
+        visible: true,
+        eraseOnClick: false,
+        autoShapes: [],
       },
       animation: {
         enabled: initialAnimationEnabledRef.current,
@@ -138,6 +147,17 @@ export default function Board({
       },
     });
   }, [disabled, hasMoveHandler, legalDests, movableColor]);
+
+  useEffect(() => {
+    apiRef.current?.set({
+      drawable: {
+        enabled: false,
+        visible: true,
+        eraseOnClick: false,
+        autoShapes: shapes ?? [],
+      },
+    });
+  }, [shapes]);
 
   return (
     <div

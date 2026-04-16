@@ -31,6 +31,14 @@ class IllegalMoveError(ValueError):
     """Raised when a submitted UCI move is not legal in the current position."""
 
 
+class TakebackUnavailableError(ValueError):
+    """Raised when the requested takeback cannot be applied."""
+
+
+class HintUnavailableError(ValueError):
+    """Raised when the requested hint cannot be provided."""
+
+
 @dataclass(frozen=True)
 class PlayMove:
     """One move made during a play session."""
@@ -63,40 +71,64 @@ class PlayState:
 
     game_id: str
     opponent: OpponentInfo
+    user_color: Side
     status: PlayStatus
     result: GameResult
     fen: str
-    orientation: Literal["white"]
+    orientation: Side
     legal_moves: tuple[LegalMoveGroup, ...]
     moves: tuple[PlayMove, ...]
     bot_move: PlayMove | None
+    hints_remaining: int
+    takebacks_remaining: int
     pgn: str | None
 
 
 @dataclass
 class PlaySession:
-    """A single local white-vs-bot game."""
+    """A single local game against a bot."""
 
     game_id: str
     opponent: OpponentInfo
     opponent_provider: OpponentMoveProvider
+    user_color: Side = "white"
     board: chess.Board = field(default_factory=chess.Board)
     initial_fen: str | None = None
     moves: list[PlayMove] = field(default_factory=list)
     status: PlayStatus = "active"
     result: GameResult = "*"
+    max_hints_per_game: int = 3
+    hints_used: int = 0
+    max_takebacks_per_game: int = 1
+    takebacks_used: int = 0
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def __post_init__(self) -> None:
         if self.initial_fen is None:
             self.initial_fen = self.board.fen()
 
-    async def apply_user_move(self, uci: str) -> PlayState:
-        """Apply a white move and, if needed, a black bot reply."""
+    async def start(self) -> PlayState:
+        """Start the session, making an opening bot move when the user plays Black."""
 
         async with self._lock:
             self._ensure_active()
-            if self.board.turn != chess.WHITE:
+            bot_move: PlayMove | None = None
+            if self.board.turn != _chess_color(self.user_color):
+                working_board = self.board.copy(stack=False)
+                working_moves = list(self.moves)
+                bot_move = await self._apply_bot_move(working_board, working_moves)
+                self.board = working_board
+                self.moves = working_moves
+                self.result = _result_for_board(working_board)
+                self.status = "completed" if self.result != "*" else "active"
+            return self.state(bot_move=bot_move)
+
+    async def apply_user_move(self, uci: str) -> PlayState:
+        """Apply a user move and, if needed, a bot reply."""
+
+        async with self._lock:
+            self._ensure_active()
+            if self.board.turn != _chess_color(self.user_color):
                 raise IllegalMoveError("It is not the user's turn.")
 
             user_move = _parse_legal_move(self.board, uci)
@@ -110,11 +142,7 @@ class PlaySession:
             status: PlayStatus = "completed" if result != "*" else "active"
 
             if status == "active":
-                opponent_reply = await self.opponent_provider.choose_move(working_board.fen())
-                bot_chess_move = _parse_legal_move(working_board, opponent_reply.uci)
-                bot_move = _play_move(working_board, bot_chess_move)
-                working_moves.append(bot_move)
-                working_board.push(bot_chess_move)
+                bot_move = await self._apply_bot_move(working_board, working_moves)
                 result = _result_for_board(working_board)
                 status = "completed" if result != "*" else "active"
 
@@ -125,13 +153,83 @@ class PlaySession:
 
             return self.state(bot_move=bot_move)
 
+    async def takeback(self) -> PlayState:
+        """Undo the latest user move plus any following bot reply."""
+
+        async with self._lock:
+            self._ensure_active()
+            if self.takebacks_used >= self.max_takebacks_per_game:
+                raise TakebackUnavailableError(
+                    "The one takeback for this game has already been used."
+                )
+
+            user_index = self._latest_user_move_index()
+            if user_index is None:
+                raise TakebackUnavailableError("There is no user move to take back yet.")
+
+            remove_until = user_index + 1
+            if remove_until < len(self.moves) and self.moves[remove_until].side != self.user_color:
+                remove_until += 1
+
+            remaining_moves = self.moves[:user_index] + self.moves[remove_until:]
+            rebuilt_board = chess.Board(self.initial_fen or chess.STARTING_FEN)
+            for played in remaining_moves:
+                move = chess.Move.from_uci(played.uci)
+                if move not in rebuilt_board.legal_moves:
+                    raise IllegalMoveError(f"Stored move is no longer legal: {played.uci}")
+                rebuilt_board.push(move)
+
+            self.board = rebuilt_board
+            self.moves = remaining_moves
+            self.status = "active"
+            self.result = "*"
+            self.takebacks_used += 1
+            return self.state(bot_move=None)
+
+    async def hint_fen(self) -> str:
+        """Return the current FEN if a hint may be requested."""
+
+        async with self._lock:
+            self._ensure_active()
+            if self.board.turn != _chess_color(self.user_color):
+                raise HintUnavailableError("Hints are only available when it is your turn.")
+            if self.hints_used >= self.max_hints_per_game:
+                raise HintUnavailableError("All three hints for this game have already been used.")
+            return self.board.fen()
+
+    async def record_hint_used(self, fen: str) -> int:
+        """Consume one hint for the current position and return the remaining count."""
+
+        async with self._lock:
+            self._ensure_active()
+            if self.board.fen() != fen:
+                raise HintUnavailableError("The position changed before the hint could be shown.")
+            if self.board.turn != _chess_color(self.user_color):
+                raise HintUnavailableError("Hints are only available when it is your turn.")
+            if self.hints_used >= self.max_hints_per_game:
+                raise HintUnavailableError("All three hints for this game have already been used.")
+            self.hints_used += 1
+            return self.hints_remaining
+
     def resign(self) -> PlayState:
         """End the session as a user resignation."""
 
         self._ensure_active()
         self.status = "resigned"
-        self.result = "0-1"
+        self.result = "0-1" if self.user_color == "white" else "1-0"
         return self.state(bot_move=None)
+
+    @property
+    def hints_remaining(self) -> int:
+        """Number of hints still available this game."""
+
+        return max(0, self.max_hints_per_game - self.hints_used)
+
+    @property
+    def takebacks_remaining(self) -> int:
+        """Number of takebacks still available this game."""
+
+        return max(0, self.max_takebacks_per_game - self.takebacks_used)
 
     def state(self, *, bot_move: PlayMove | None) -> PlayState:
         """Return the public state for this game."""
@@ -139,13 +237,16 @@ class PlaySession:
         return PlayState(
             game_id=self.game_id,
             opponent=self.opponent,
+            user_color=self.user_color,
             status=self.status,
             result=self.result,
             fen=self.board.fen(),
-            orientation="white",
-            legal_moves=_legal_move_groups(self.board, self.status),
+            orientation=self.user_color,
+            legal_moves=_legal_move_groups(self.board, self.status, self.user_color),
             moves=tuple(self.moves),
             bot_move=bot_move,
+            hints_remaining=self.hints_remaining,
+            takebacks_remaining=self.takebacks_remaining,
             pgn=self.pgn() if self.status != "active" else None,
         )
 
@@ -160,10 +261,11 @@ class PlaySession:
         game.headers["Site"] = "localhost"
         game.headers["Date"] = datetime.now(UTC).strftime("%Y.%m.%d")
         game.headers["Round"] = "-"
-        game.headers["White"] = "You"
-        game.headers["Black"] = self.opponent.label
+        game.headers["White"] = "You" if self.user_color == "white" else self.opponent.label
+        game.headers["Black"] = "You" if self.user_color == "black" else self.opponent.label
         if self.opponent.maia_rating is not None:
-            game.headers["BlackElo"] = str(self.opponent.maia_rating)
+            elo_header = "BlackElo" if self.user_color == "white" else "WhiteElo"
+            game.headers[elo_header] = str(self.opponent.maia_rating)
         game.headers["Result"] = self.result
 
         node: chess.pgn.GameNode = game
@@ -182,6 +284,24 @@ class PlaySession:
         if self.status != "active":
             raise PlayGameFinishedError("This game has already finished.")
 
+    async def _apply_bot_move(
+        self,
+        working_board: chess.Board,
+        working_moves: list[PlayMove],
+    ) -> PlayMove:
+        opponent_reply = await self.opponent_provider.choose_move(working_board.fen())
+        bot_chess_move = _parse_legal_move(working_board, opponent_reply.uci)
+        bot_move = _play_move(working_board, bot_chess_move)
+        working_moves.append(bot_move)
+        working_board.push(bot_chess_move)
+        return bot_move
+
+    def _latest_user_move_index(self) -> int | None:
+        for index in range(len(self.moves) - 1, -1, -1):
+            if self.moves[index].side == self.user_color:
+                return index
+        return None
+
 
 class InMemoryPlayStore:
     """Local process memory for play sessions."""
@@ -194,6 +314,7 @@ class InMemoryPlayStore:
         *,
         opponent: OpponentInfo,
         opponent_provider: OpponentMoveProvider,
+        user_color: Side = "white",
     ) -> PlaySession:
         """Create and store a fresh standard game."""
 
@@ -202,6 +323,7 @@ class InMemoryPlayStore:
             game_id=game_id,
             opponent=opponent,
             opponent_provider=opponent_provider,
+            user_color=user_color,
         )
         self._sessions[game_id] = session
         return session
@@ -245,8 +367,9 @@ def _result_for_board(board: chess.Board) -> GameResult:
 def _legal_move_groups(
     board: chess.Board,
     status: PlayStatus,
+    user_color: Side,
 ) -> tuple[LegalMoveGroup, ...]:
-    if status != "active" or board.turn != chess.WHITE:
+    if status != "active" or board.turn != _chess_color(user_color):
         return ()
 
     grouped: dict[str, dict[str, set[Promotion]]] = {}
@@ -275,3 +398,7 @@ def _legal_move_groups(
 
 def _promotion_sort_key(promotion: Promotion) -> int:
     return {"q": 0, "r": 1, "b": 2, "n": 3}[promotion]
+
+
+def _chess_color(side: Side) -> bool:
+    return chess.WHITE if side == "white" else chess.BLACK

@@ -6,6 +6,8 @@ import type {
   ExplanationStatus,
   MoveExplanation,
   MaiaRating,
+  PlayColor,
+  PlayHint,
   PlayState,
   PlayOpponentRequest,
   PlayOpponentsStatus,
@@ -76,6 +78,7 @@ export async function getExplanationStatus(): Promise<ExplanationStatus> {
 export async function startPlayGame(options?: {
   opponent: PlayOpponentRequest;
   maiaRating: MaiaRating;
+  userColor: PlayColor;
 }): Promise<PlayState> {
   return requestJson<PlayState>(`${PLAY_URL}/new`, {
     method: "POST",
@@ -84,6 +87,7 @@ export async function startPlayGame(options?: {
       ? JSON.stringify({
           opponent: options.opponent,
           maia_rating: options.maiaRating,
+          user_color: options.userColor,
         })
       : undefined,
   });
@@ -110,6 +114,19 @@ export async function resignPlayGame(gameId: string): Promise<PlayState> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ game_id: gameId }),
   });
+}
+
+export async function takebackPlayGame(gameId: string): Promise<PlayState> {
+  return requestJson<PlayState>(`${PLAY_URL}/takeback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ game_id: gameId }),
+  });
+}
+
+export async function getPlayHint(gameId: string): Promise<PlayHint> {
+  const search = new URLSearchParams({ session_id: gameId });
+  return requestJson<PlayHint>(`${PLAY_URL}/hint?${search.toString()}`);
 }
 
 export async function getProfileDashboard(): Promise<ProfileDashboard> {
@@ -159,6 +176,9 @@ export function userFacingErrorMessage(error: unknown): string {
     }
     if (error.code === "opponent_unavailable") {
       return "No local play opponent is available. Install Stockfish or set CHESS_ML_PLAY_STOCKFISH_PATH, then retry.";
+    }
+    if (error.code === "takeback_unavailable" || error.code === "hint_unavailable") {
+      return error.message;
     }
     if (error.code === "no_due_drill") {
       return "No due drills are available for that motif yet.";
