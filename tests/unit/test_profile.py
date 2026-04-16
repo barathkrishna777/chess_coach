@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -112,6 +113,162 @@ def test_profile_store_recent_games_sort_newest_first(tmp_path: Path) -> None:
     assert [game.game_id for game in dashboard.recent_games] == ["newer", "older"]
 
 
+def test_profile_store_persists_opening_metadata_idempotently(tmp_path: Path) -> None:
+    store = ProfileStore(tmp_path / "profile.sqlite3")
+    store.save_review(
+        _review(
+            "game-1",
+            ply_count=10,
+            eco_code="B01",
+            opening_name="Scandinavian Defense",
+            motifs=(_occurrence(ply=3, motif_id="missed_tactic", label="Missed tactic"),),
+        ),
+        reviewed_at=datetime(2026, 4, 15, 12, tzinfo=UTC),
+    )
+    store.save_review(
+        _review(
+            "game-1",
+            ply_count=10,
+            eco_code="C20",
+            opening_name="Wayward Queen Attack",
+            motifs=(_occurrence(ply=4, motif_id="hanging_piece", label="Hanging piece"),),
+        ),
+        reviewed_at=datetime(2026, 4, 15, 13, tzinfo=UTC),
+    )
+
+    dashboard = store.dashboard()
+
+    assert dashboard.totals.games_reviewed == 1
+    assert [(opening.eco, opening.name, opening.games) for opening in dashboard.openings] == [
+        ("C20", "Wayward Queen Attack", 1)
+    ]
+    assert dashboard.recent_games[0].opening is not None
+    assert dashboard.recent_games[0].opening.eco == "C20"
+
+
+def test_profile_store_aggregates_openings(tmp_path: Path) -> None:
+    store = ProfileStore(tmp_path / "profile.sqlite3")
+    store.save_review(
+        _review(
+            "game-1",
+            ply_count=10,
+            eco_code="B01",
+            opening_name="Scandinavian Defense",
+            motifs=(
+                _occurrence(
+                    ply=3,
+                    motif_id="missed_tactic",
+                    label="Missed tactic",
+                    loss_cp=300,
+                ),
+                _occurrence(
+                    ply=5,
+                    motif_id="missed_tactic",
+                    label="Missed tactic",
+                    loss_cp=100,
+                ),
+            ),
+        ),
+    )
+    store.save_review(
+        _review(
+            "game-2",
+            ply_count=8,
+            eco_code="B01",
+            opening_name="Scandinavian Defense",
+            motifs=(_occurrence(ply=3, motif_id="hanging_piece", label="Hanging piece"),),
+        ),
+    )
+
+    dashboard = store.dashboard()
+
+    assert len(dashboard.openings) == 1
+    opening = dashboard.openings[0]
+    assert opening.eco == "B01"
+    assert opening.name == "Scandinavian Defense"
+    assert opening.games == 2
+    assert opening.avg_loss_cp == 233.33
+    assert opening.top_motif is not None
+    assert opening.top_motif.id == "missed_tactic"
+    assert opening.top_motif.count == 2
+
+
+def test_profile_store_reads_existing_games_without_opening_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE profile_games (
+                game_id TEXT PRIMARY KEY,
+                white_name TEXT,
+                white_elo INTEGER,
+                black_name TEXT,
+                black_elo INTEGER,
+                result TEXT NOT NULL,
+                source TEXT NOT NULL,
+                ply_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE profile_motif_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id TEXT NOT NULL,
+                ply INTEGER NOT NULL,
+                move_number INTEGER NOT NULL,
+                side TEXT NOT NULL,
+                san TEXT NOT NULL,
+                uci TEXT NOT NULL,
+                motif_id TEXT NOT NULL,
+                motif_label TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                loss_cp INTEGER,
+                score_cp INTEGER,
+                FOREIGN KEY(game_id) REFERENCES profile_games(game_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO profile_games (
+                game_id,
+                white_name,
+                white_elo,
+                black_name,
+                black_elo,
+                result,
+                source,
+                ply_count,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy",
+                "Ada",
+                1500,
+                "Turing",
+                1600,
+                "1-0",
+                "pgn_upload",
+                4,
+                "2026-04-15T12:00:00+00:00",
+                "2026-04-15T12:00:00+00:00",
+            ),
+        )
+
+    dashboard = ProfileStore(db_path).dashboard()
+
+    assert dashboard.totals.games_reviewed == 1
+    assert dashboard.openings == ()
+    assert dashboard.recent_games[0].opening is None
+
+
 def test_profile_api_returns_empty_profile(tmp_path: Path) -> None:
     app = FastAPI()
     app.state.profile_store = ProfileStore(tmp_path / "profile.sqlite3")
@@ -136,6 +293,7 @@ def test_profile_api_returns_empty_profile(tmp_path: Path) -> None:
             {"phase": "middlegame", "count": 0, "rate_per_100_moves": 0.0},
             {"phase": "endgame", "count": 0, "rate_per_100_moves": 0.0},
         ],
+        "openings": [],
         "recent_games": [],
     }
 
@@ -161,20 +319,34 @@ def test_post_games_writes_profile_rows(tmp_path: Path) -> None:
 [BlackElo "1600"]
 [Result "*"]
 
-1. e4 *
+1. e4 d5 *
 """,
         },
     )
 
     assert response.status_code == 200
+    assert response.json()["opening"] == {"eco": "B01", "name": "Scandinavian Defense"}
     profile_response = client.get("/api/profile/me")
     assert profile_response.status_code == 200
     profile = profile_response.json()
     assert profile["totals"]["games_reviewed"] == 1
-    assert profile["totals"]["moves_reviewed"] == 1
+    assert profile["totals"]["moves_reviewed"] == 2
     assert profile["recent_games"][0]["players"]["white"] == {"name": "Ada", "elo": 1500}
     assert profile["recent_games"][0]["players"]["black"] == {"name": "Turing", "elo": 1600}
     assert profile["recent_games"][0]["source"] == "pgn_upload"
+    assert profile["recent_games"][0]["opening"] == {
+        "eco": "B01",
+        "name": "Scandinavian Defense",
+    }
+    assert profile["openings"] == [
+        {
+            "eco": "B01",
+            "name": "Scandinavian Defense",
+            "games": 1,
+            "avg_loss_cp": 0.0,
+            "top_motif": None,
+        }
+    ]
 
 
 class _FakeStockfishPool:
@@ -212,6 +384,8 @@ def _review(
     *,
     ply_count: int,
     motifs: tuple[ProfileMotifOccurrence, ...] = (),
+    eco_code: str | None = None,
+    opening_name: str | None = None,
 ) -> ProfileGameReview:
     return ProfileGameReview(
         game_id=game_id,
@@ -222,6 +396,8 @@ def _review(
         result="1-0",
         source="pgn_upload",
         ply_count=ply_count,
+        eco_code=eco_code,
+        opening_name=opening_name,
         motif_occurrences=motifs,
     )
 
@@ -232,6 +408,7 @@ def _occurrence(
     motif_id: str,
     label: str,
     phase: Literal["opening", "middlegame", "endgame"] = "opening",
+    loss_cp: int = 300,
 ) -> ProfileMotifOccurrence:
     return ProfileMotifOccurrence(
         ply=ply,
@@ -243,6 +420,6 @@ def _occurrence(
         motif_label=label,
         severity="blunder",
         phase=phase,
-        loss_cp=300,
-        score_cp=300,
+        loss_cp=loss_cp,
+        score_cp=loss_cp,
     )

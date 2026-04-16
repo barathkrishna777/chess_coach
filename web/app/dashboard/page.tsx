@@ -9,6 +9,7 @@ import { getProfileDashboard, userFacingErrorMessage } from "@/lib/api";
 import type {
   ProfileDashboard,
   ProfileMotifAggregate,
+  ProfileOpeningAggregate,
   ProfilePhaseAggregate,
   RecentProfileGame,
 } from "@/lib/types";
@@ -17,6 +18,7 @@ export default function DashboardPage() {
   const [profile, setProfile] = useState<ProfileDashboard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedOpeningEco, setSelectedOpeningEco] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,6 +49,15 @@ export default function DashboardPage() {
     () => Math.max(1, ...(profile?.motifs.map((motif) => motif.count) ?? [0])),
     [profile],
   );
+  const selectedOpening = useMemo(() => {
+    if (!profile || selectedOpeningEco === null) return null;
+    return profile.openings.find((opening) => opening.eco === selectedOpeningEco) ?? null;
+  }, [profile, selectedOpeningEco]);
+  const recentGames = useMemo(() => {
+    if (!profile) return [];
+    if (selectedOpeningEco === null) return profile.recent_games;
+    return profile.recent_games.filter((game) => game.opening?.eco === selectedOpeningEco);
+  }, [profile, selectedOpeningEco]);
 
   return (
     <main className="min-h-screen bg-[#f6f8fb] text-[#17201d]">
@@ -94,13 +105,96 @@ export default function DashboardPage() {
               <MotifList motifs={profile.motifs} maxCount={maxMotifCount} />
               <PhaseBreakdown phases={profile.phase_breakdown} />
             </section>
-            <RecentGames games={profile.recent_games} />
+            <OpeningsSection
+              openings={profile.openings}
+              selectedEco={selectedOpeningEco}
+              onSelect={setSelectedOpeningEco}
+              onClear={() => setSelectedOpeningEco(null)}
+            />
+            <RecentGames games={recentGames} activeOpening={selectedOpening} />
           </>
         ) : (
           <EmptyState />
         )}
       </div>
     </main>
+  );
+}
+
+function OpeningsSection({
+  openings,
+  selectedEco,
+  onSelect,
+  onClear,
+}: {
+  openings: ProfileOpeningAggregate[];
+  selectedEco: string | null;
+  onSelect: (eco: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <section
+      data-testid="dashboard-openings"
+      className="rounded-md border border-[#d5ddd8] bg-white"
+    >
+      <div className="flex flex-col gap-2 border-b border-[#e3e9e5] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Openings</h2>
+          {selectedEco ? (
+            <p className="mt-1 text-xs text-[#65766f]">
+              Recent games filtered to {selectedEco}.
+            </p>
+          ) : null}
+        </div>
+        {selectedEco ? (
+          <button
+            type="button"
+            onClick={onClear}
+            className="w-fit rounded-md border border-[#37786f] px-2 py-1 text-xs font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
+          >
+            Show all games
+          </button>
+        ) : null}
+      </div>
+      {openings.length > 0 ? (
+        <div className="divide-y divide-[#e3e9e5]">
+          {openings.map((opening) => (
+            <button
+              key={`${opening.eco}-${opening.name}`}
+              type="button"
+              data-testid={`opening-row-${opening.eco}`}
+              onClick={() => onSelect(opening.eco)}
+              className={`grid w-full gap-3 px-4 py-3 text-left transition md:grid-cols-[minmax(0,1fr)_7rem_8rem_10rem] ${
+                selectedEco === opening.eco ? "bg-[#e1f2ed]" : "hover:bg-[#f0f5f2]"
+              }`}
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {opening.eco} {"—"} {opening.name}
+                </p>
+                <p className="mt-1 text-xs text-[#65766f]">
+                  Select to focus the recent games list.
+                </p>
+              </div>
+              <Stat label="Games" value={opening.games.toString()} />
+              <Stat label="Avg loss" value={formatCentipawns(opening.avg_loss_cp)} />
+              <Stat
+                label="Top motif"
+                value={
+                  opening.top_motif
+                    ? `${opening.top_motif.label} (${opening.top_motif.count})`
+                    : "None"
+                }
+              />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="px-4 py-3 text-sm leading-6 text-[#4a5a54]">
+          No openings have been detected yet.
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -226,31 +320,50 @@ function PhaseBreakdown({ phases }: { phases: ProfilePhaseAggregate[] }) {
   );
 }
 
-function RecentGames({ games }: { games: RecentProfileGame[] }) {
+function RecentGames({
+  games,
+  activeOpening,
+}: {
+  games: RecentProfileGame[];
+  activeOpening: ProfileOpeningAggregate | null;
+}) {
   return (
-    <section className="rounded-md border border-[#d5ddd8] bg-white">
+    <section data-testid="recent-games" className="rounded-md border border-[#d5ddd8] bg-white">
       <div className="border-b border-[#e3e9e5] px-4 py-3">
         <h2 className="text-sm font-semibold">Recent games</h2>
+        {activeOpening ? (
+          <p className="mt-1 text-xs text-[#65766f]">
+            Showing {activeOpening.eco} {"—"} {activeOpening.name}.
+          </p>
+        ) : null}
       </div>
       <div className="divide-y divide-[#e3e9e5]">
-        {games.map((game) => (
-          <div
-            key={game.game_id}
-            className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_8rem_8rem_8rem]"
-          >
-            <div className="min-w-0">
-              <p className="truncate font-medium">
-                {playerName(game.players.white)} vs {playerName(game.players.black)}
-              </p>
-              <p className="mt-1 text-xs text-[#65766f]">
-                {sourceLabel(game.source)} · {formatDate(game.updated_at)}
-              </p>
+        {games.length > 0 ? (
+          games.map((game) => (
+            <div
+              key={game.game_id}
+              data-testid="recent-game-row"
+              className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_8rem_8rem_8rem]"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {playerName(game.players.white)} vs {playerName(game.players.black)}
+                </p>
+                <p className="mt-1 text-xs text-[#65766f]">
+                  {sourceLabel(game.source)} · {formatDate(game.updated_at)}
+                  {game.opening ? ` · ${game.opening.eco} ${game.opening.name}` : ""}
+                </p>
+              </div>
+              <Stat label="Result" value={game.result} />
+              <Stat label="Moves" value={game.ply_count.toString()} />
+              <Stat label="Flagged" value={game.flagged_moves.toString()} />
             </div>
-            <Stat label="Result" value={game.result} />
-            <Stat label="Moves" value={game.ply_count.toString()} />
-            <Stat label="Flagged" value={game.flagged_moves.toString()} />
-          </div>
-        ))}
+          ))
+        ) : (
+          <p className="px-4 py-3 text-sm leading-6 text-[#4a5a54]">
+            No recent games match this opening yet.
+          </p>
+        )}
       </div>
     </section>
   );
@@ -305,6 +418,10 @@ function sourceLabel(source: RecentProfileGame["source"]): string {
 
 function formatRate(value: number): string {
   return value.toFixed(value % 1 === 0 ? 0 : 2);
+}
+
+function formatCentipawns(value: number): string {
+  return `${value.toFixed(value % 1 === 0 ? 0 : 2)} cp`;
 }
 
 function formatDate(value: string): string {

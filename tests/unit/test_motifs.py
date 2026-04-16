@@ -1,11 +1,20 @@
 """Tests for Slice 2 heuristic motif classification."""
 
-from typing import Literal
+from pathlib import Path
+from typing import Literal, cast
 
 import chess
 
+from chess_ml.api.games import _motif_model
 from chess_ml.classifier.classify import classify_moves
-from chess_ml.classifier.motifs import AnalyzedMove, Motif
+from chess_ml.classifier.motifs import (
+    AnalyzedMove,
+    Motif,
+    MotifEvidence,
+    MotifId,
+    MoveRef,
+    PieceRef,
+)
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
 from chess_ml.ingestion.pgn import ParsedPgnGame, parse_pgn
 
@@ -195,6 +204,249 @@ def test_mate_swing_uses_effective_loss_without_public_score_cp() -> None:
     assert allowed.evidence.best_move.san == "Qh4#"
 
 
+def test_pin_tags_missed_pin_best_line() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "4k3/3n4/8/8/2B5/8/8/4K3 w - - 0 1"]
+[Result "*"]
+
+1. Ke2 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=300, after_cp=0, best_before="c4b5"),
+        },
+    )
+
+    pin = _required_motif(motifs[0], "pin")
+    assert pin.severity == "blunder"
+    assert pin.evidence.piece is not None
+    assert pin.evidence.piece.role == "knight"
+    assert pin.evidence.piece.square == "d7"
+    assert "b5 B" in pin.evidence.attackers
+    assert "e8 K" in pin.evidence.defenders
+
+
+def test_pin_tags_allowed_pin_best_reply() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "4k3/8/8/2b5/8/2N5/P7/4K3 w - - 0 1"]
+[Result "*"]
+
+1. a3 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=250, after_cp=0, best_after="c5b4"),
+        },
+    )
+
+    pin = _required_motif(motifs[0], "pin")
+    assert pin.severity == "mistake"
+    assert pin.evidence.best_move is not None
+    assert pin.evidence.best_move.uci == "c5b4"
+    assert pin.evidence.piece is not None
+    assert pin.evidence.piece.square == "c3"
+
+
+def test_fork_tags_missed_fork_best_line() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "k2q3r/8/8/6N1/8/8/8/4K3 w - - 0 1"]
+[Result "*"]
+
+1. Ke2 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=280, after_cp=0, best_before="g5f7"),
+        },
+    )
+
+    fork = _required_motif(motifs[0], "fork")
+    assert fork.evidence.piece is not None
+    assert fork.evidence.piece.role == "knight"
+    assert fork.evidence.piece.square == "f7"
+    assert set(fork.evidence.attackers) == {"d8 Q", "h8 R"}
+
+
+def test_fork_tags_allowed_fork_best_reply() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "k7/8/8/8/6n1/8/P7/3QK2R w - - 0 1"]
+[Result "*"]
+
+1. a3 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=260, after_cp=0, best_after="g4f2"),
+        },
+    )
+
+    fork = _required_motif(motifs[0], "fork")
+    assert fork.evidence.best_move is not None
+    assert fork.evidence.best_move.uci == "g4f2"
+    assert fork.evidence.piece is not None
+    assert fork.evidence.piece.square == "f2"
+    assert set(fork.evidence.attackers) == {"d1 Q", "h1 R"}
+
+
+def test_overloaded_defender_tags_missed_capture() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "k7/8/3q4/8/3r4/4B3/7b/4K3 w - - 0 1"]
+[Result "*"]
+
+1. Kf1 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=260, after_cp=0, best_before="e3d4"),
+        },
+    )
+
+    overloaded = _required_motif(motifs[0], "overloaded_defender")
+    assert overloaded.evidence.piece is not None
+    assert overloaded.evidence.piece.role == "queen"
+    assert overloaded.evidence.piece.square == "d6"
+    assert overloaded.evidence.attackers == ("d4 R",)
+    assert "h2 B" in overloaded.evidence.defenders
+
+
+def test_overloaded_defender_tags_allowed_capture() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "k7/7B/8/8/8/3Q4/P3b3/3RK3 w - - 0 1"]
+[Result "*"]
+
+1. a3 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=250, after_cp=0, best_after="e2d1"),
+        },
+    )
+
+    overloaded = _required_motif(motifs[0], "overloaded_defender")
+    assert overloaded.evidence.best_move is not None
+    assert overloaded.evidence.best_move.uci == "e2d1"
+    assert overloaded.evidence.piece is not None
+    assert overloaded.evidence.piece.square == "d3"
+    assert overloaded.evidence.attackers == ("d1 R",)
+    assert "h7 B" in overloaded.evidence.defenders
+
+
+def test_discovered_attack_tags_missed_discovery() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "k3q3/8/8/8/4N3/8/8/K3R3 w - - 0 1"]
+[Result "*"]
+
+1. Kb1 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=260, after_cp=0, best_before="e4f6"),
+        },
+    )
+
+    discovered = _required_motif(motifs[0], "discovered_attack")
+    assert discovered.evidence.piece is not None
+    assert discovered.evidence.piece.role == "rook"
+    assert discovered.evidence.piece.square == "e1"
+    assert discovered.evidence.attackers == ("e8 Q",)
+    assert discovered.evidence.defenders == ("e4 N",)
+
+
+def test_discovered_attack_tags_allowed_discovery() -> None:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[SetUp "1"]
+[FEN "k3r3/8/8/4n3/8/8/P7/K3Q3 w - - 0 1"]
+[Result "*"]
+
+1. a3 *
+"""
+    )
+
+    motifs = _classify(
+        parsed,
+        {
+            1: _spec(before_cp=250, after_cp=0, best_after="e5f3"),
+        },
+    )
+
+    discovered = _required_motif(motifs[0], "discovered_attack")
+    assert discovered.evidence.best_move is not None
+    assert discovered.evidence.best_move.uci == "e5f3"
+    assert discovered.evidence.piece is not None
+    assert discovered.evidence.piece.square == "e8"
+    assert discovered.evidence.attackers == ("e1 Q",)
+    assert discovered.evidence.defenders == ("e5 N",)
+
+
+def test_demo_missed_tactic_fixture_keeps_missed_tactic_label() -> None:
+    parsed = parse_pgn(Path("tests/fixtures/demo/missed-tactic.pgn").read_text())
+
+    motifs = _classify(
+        parsed,
+        {
+            7: _spec(before_cp=740, after_cp=85, best_before="c3d5"),
+        },
+    )
+
+    assert "missed_tactic" in _motif_ids(motifs[6])
+
+
+def test_api_motif_model_accepts_richer_motif_ids() -> None:
+    for motif_id, label in (
+        ("pin", "Pin"),
+        ("fork", "Fork"),
+        ("overloaded_defender", "Overloaded defender"),
+        ("discovered_attack", "Discovered attack"),
+    ):
+        model = _motif_model(_api_motif(cast(MotifId, motif_id), label))
+        assert model.id == motif_id
+        assert model.label == label
+
+
 def test_normal_developing_moves_have_no_motifs() -> None:
     parsed = parse_pgn(
         """
@@ -313,3 +565,24 @@ def _required_motif(motifs: tuple[Motif, ...], motif_id: str) -> Motif:
 
 def _motif_ids(motifs: tuple[Motif, ...]) -> list[str]:
     return [motif.id for motif in motifs]
+
+
+def _api_motif(motif_id: MotifId, label: str) -> Motif:
+    return Motif(
+        id=motif_id,
+        label=label,
+        severity="mistake",
+        source="heuristic",
+        score_cp=220,
+        evidence=MotifEvidence(
+            threshold_cp=200,
+            score_kind="cp",
+            phase="middlegame",
+            piece=PieceRef(color="white", role="knight", square="f3"),
+            attackers=("d4 Q",),
+            defenders=("e2 K",),
+            best_move=MoveRef(uci="g1f3", san="Nf3"),
+            opponent_reply=None,
+            related_ply=None,
+        ),
+    )

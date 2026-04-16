@@ -37,9 +37,11 @@ class LearnedMotifClassifier:
         *,
         model: SmallMotifNet,
         thresholds: Mapping[MotifId, float],
+        label_order: tuple[MotifId, ...] = LABEL_ORDER,
     ) -> None:
         self.model = model
         self.thresholds = dict(thresholds)
+        self.label_order = label_order
         self.model.eval()
 
     @classmethod
@@ -51,22 +53,21 @@ class LearnedMotifClassifier:
             raise ValueError("Classifier checkpoint must be a dictionary.")
         if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
             raise ValueError("Unsupported classifier checkpoint schema.")
-        if tuple(checkpoint.get("label_order", ())) != LABEL_ORDER:
-            raise ValueError("Classifier checkpoint label order does not match this build.")
+        label_order = _label_order(checkpoint.get("label_order"))
 
         hidden_channels = _int(checkpoint, "hidden_channels")
         dropout = _float(checkpoint, "dropout")
-        thresholds = _thresholds(checkpoint.get("thresholds"))
+        thresholds = _thresholds(checkpoint.get("thresholds"), label_order)
         model = SmallMotifNet(
             hidden_channels=hidden_channels,
             dropout=dropout,
-            label_count=len(LABEL_ORDER),
+            label_count=len(label_order),
         )
         state = checkpoint.get("model_state")
         if not isinstance(state, dict):
             raise ValueError("Classifier checkpoint is missing model_state.")
         model.load_state_dict(state)
-        return cls(model=model, thresholds=thresholds)
+        return cls(model=model, thresholds=thresholds, label_order=label_order)
 
     def predict(self, moves: list[AnalyzedMove]) -> list[list[LearnedPrediction]]:
         """Return above-threshold learned motif predictions for each move."""
@@ -80,7 +81,7 @@ class LearnedMotifClassifier:
         results: list[list[LearnedPrediction]] = []
         for row in probabilities:
             move_predictions: list[LearnedPrediction] = []
-            for index, label in enumerate(LABEL_ORDER):
+            for index, label in enumerate(self.label_order):
                 probability = float(row[index].item())
                 if probability >= self.thresholds[label]:
                     move_predictions.append(LearnedPrediction(label=label, probability=probability))
@@ -118,12 +119,26 @@ def _default_checkpoint_path() -> Path:
         return DEFAULT_CLASSIFIER_CHECKPOINT_PATH
 
 
-def _thresholds(value: object) -> dict[MotifId, float]:
+def _label_order(value: object) -> tuple[MotifId, ...]:
+    if not isinstance(value, list | tuple):
+        raise ValueError("Classifier checkpoint label order must be a list or tuple.")
+    labels: list[MotifId] = []
+    for item in value:
+        if item not in LABEL_ORDER:
+            raise ValueError("Classifier checkpoint label order contains an unknown label.")
+        labels.append(cast(MotifId, item))
+    label_order = tuple(labels)
+    if not label_order or label_order != LABEL_ORDER[: len(label_order)]:
+        raise ValueError("Classifier checkpoint label order does not match this build prefix.")
+    return label_order
+
+
+def _thresholds(value: object, label_order: tuple[MotifId, ...]) -> dict[MotifId, float]:
     if not isinstance(value, dict):
         raise ValueError("Classifier checkpoint thresholds must be a dictionary.")
     raw = cast(dict[object, object], value)
     thresholds: dict[MotifId, float] = {}
-    for label in LABEL_ORDER:
+    for label in label_order:
         item = raw.get(label)
         if not isinstance(item, int | float):
             raise ValueError(f"Classifier checkpoint threshold missing for {label}.")

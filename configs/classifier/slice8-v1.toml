@@ -28,3 +28,7 @@ missed_tactic = 0.62
 allowed_tactic = 0.62
 endgame_slip = 0.62
 opening_inaccuracy = 0.62
+pin = 0.62
+fork = 0.62
+overloaded_defender = 0.62
+discovered_attack = 0.62

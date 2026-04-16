@@ -36,6 +36,7 @@ def test_demo_seed_upserts_three_games_without_duplicates(tmp_path: Path) -> Non
     assert dashboard.recent_games[0].players.white.name == "Priya"
     assert dashboard.recent_games[1].players.white.name == "Ada"
     assert dashboard.recent_games[2].players.white.name == "Nina"
+    assert {opening.eco for opening in dashboard.openings} >= {"A00", "B01", "C20"}
 
 
 class _FakeEvaluator:

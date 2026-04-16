@@ -7,6 +7,11 @@ export type EngineMove = {
   san: string;
 };
 
+export type OpeningTag = {
+  eco: string;
+  name: string;
+};
+
 export type EngineAnalysis = {
   status: "ok" | "terminal";
   depth: number | null;
@@ -25,7 +30,11 @@ export type Motif = {
     | "missed_tactic"
     | "allowed_tactic"
     | "endgame_slip"
-    | "opening_inaccuracy";
+    | "opening_inaccuracy"
+    | "pin"
+    | "fork"
+    | "overloaded_defender"
+    | "discovered_attack";
   label: string;
   severity: MotifSeverity;
   source: "heuristic" | "learned" | "ensemble";
@@ -106,6 +115,7 @@ export type AnnotatedGame = {
     black: { name: string | null; elo: number | null };
   };
   result: "1-0" | "0-1" | "1/2-1/2" | "*";
+  opening: OpeningTag | null;
   initial_fen: string;
   final_fen: string;
   analysis: {
@@ -204,6 +214,7 @@ export type ProfileDashboard = {
   };
   motifs: ProfileMotifAggregate[];
   phase_breakdown: ProfilePhaseAggregate[];
+  openings: ProfileOpeningAggregate[];
   recent_games: RecentProfileGame[];
 };
 
@@ -275,6 +286,20 @@ export type ProfilePhaseAggregate = {
   rate_per_100_moves: number;
 };
 
+export type ProfileOpeningTopMotif = {
+  id: string;
+  label: string;
+  count: number;
+};
+
+export type ProfileOpeningAggregate = {
+  eco: string;
+  name: string;
+  games: number;
+  avg_loss_cp: number;
+  top_motif: ProfileOpeningTopMotif | null;
+};
+
 export type RecentProfileGame = {
   game_id: string;
   players: {
@@ -287,6 +312,7 @@ export type RecentProfileGame = {
   updated_at: string;
   ply_count: number;
   flagged_moves: number;
+  opening: OpeningTag | null;
 };
 
 export type ApiErrorEnvelope = {

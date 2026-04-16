@@ -11,9 +11,14 @@ import torch
 from chess_ml.classifier.classify import classify_moves
 from chess_ml.classifier.config import LABEL_ORDER, ClassifierConfig
 from chess_ml.classifier.learned import LearnedMotifClassifier, LearnedPrediction
-from chess_ml.classifier.model import BOARD_PLANES, METADATA_FEATURES, encode_analyzed_move
+from chess_ml.classifier.model import (
+    BOARD_PLANES,
+    METADATA_FEATURES,
+    SmallMotifNet,
+    encode_analyzed_move,
+)
 from chess_ml.classifier.motifs import AnalyzedMove, MotifId
-from chess_ml.classifier.train import train_rows
+from chess_ml.classifier.train import CHECKPOINT_SCHEMA_VERSION, train_rows
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove
 from chess_ml.ingestion.lichess import (
     LabeledPositionExample,
@@ -136,6 +141,28 @@ def test_checkpoint_loader_validates_trained_checkpoint(tmp_path: Path) -> None:
     classifier = LearnedMotifClassifier.from_checkpoint(checkpoint_path)
 
     assert classifier.thresholds["opening_inaccuracy"] == config.thresholds["opening_inaccuracy"]
+
+
+def test_checkpoint_loader_accepts_old_label_order_prefix(tmp_path: Path) -> None:
+    old_label_order = LABEL_ORDER[:5]
+    model = SmallMotifNet(hidden_channels=4, dropout=0.0, label_count=len(old_label_order))
+    checkpoint_path = tmp_path / "old-classifier.pt"
+    torch.save(
+        {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "label_order": list(old_label_order),
+            "thresholds": dict.fromkeys(old_label_order, 0.5),
+            "hidden_channels": 4,
+            "dropout": 0.0,
+            "model_state": model.state_dict(),
+        },
+        checkpoint_path,
+    )
+
+    classifier = LearnedMotifClassifier.from_checkpoint(checkpoint_path)
+
+    assert classifier.label_order == old_label_order
+    assert set(classifier.thresholds) == set(old_label_order)
 
 
 def test_classify_moves_can_add_learned_only_motif() -> None:

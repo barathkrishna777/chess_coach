@@ -19,6 +19,7 @@ test("uploads a sample PGN and shows deterministic review motifs", async ({ page
   await page.getByRole("button", { name: "Analyze game" }).click();
 
   await expect(page.getByRole("heading", { name: /Ada.*Turing/ })).toBeVisible();
+  await expect(page.getByText(/B01.*Scandinavian Defense/)).toBeVisible();
   await expect(page.getByText("Missed tactic").first()).toBeVisible();
   await expect(page.getByText("Best", { exact: true })).toBeVisible();
   await expect(page.getByText("Main line", { exact: true })).toBeVisible();
@@ -51,6 +52,24 @@ test("dashboard loads the seeded demo profile", async ({ page }) => {
   await expect(page.getByText("Ada (1500) vs Turing (1520)")).toBeVisible();
   await expect(page.getByText("Priya (1300) vs Max (1350)")).toBeVisible();
   await expect(page.getByText(/Missed tactic|Allowed tactic|Hanging piece/).first()).toBeVisible();
+  await expect(page.getByTestId("dashboard-openings")).toContainText("Openings");
+  await expect(page.getByTestId("dashboard-openings")).toContainText("B01");
+  await expect(page.getByTestId("dashboard-openings")).toContainText("Scandinavian Defense");
+});
+
+test("dashboard opening selection filters recent games", async ({ page }) => {
+  await page.goto("/dashboard");
+
+  await expect(page.getByTestId("recent-game-row")).toHaveCount(3);
+  await page.getByTestId("opening-row-B01").click();
+
+  await expect(page.getByTestId("recent-game-row")).toHaveCount(1);
+  await expect(page.getByText("Ada (1500) vs Turing (1520)")).toBeVisible();
+  await expect(page.getByText("Nina (1450) vs Omar (1500)")).toHaveCount(0);
+  await expect(page.getByText("Priya (1300) vs Max (1350)")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Show all games" }).click();
+  await expect(page.getByTestId("recent-game-row")).toHaveCount(3);
 });
 
 test("starts a personal drill from the dashboard and reveals feedback after a move", async ({

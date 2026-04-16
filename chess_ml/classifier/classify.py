@@ -35,6 +35,10 @@ _LABELS: dict[MotifId, str] = {
     "allowed_tactic": "Allowed tactic",
     "endgame_slip": "Endgame slip",
     "opening_inaccuracy": "Opening inaccuracy",
+    "pin": "Pin",
+    "fork": "Fork",
+    "overloaded_defender": "Overloaded defender",
+    "discovered_attack": "Discovered attack",
 }
 
 
@@ -140,6 +144,9 @@ def _learned_motif(
         if loss.effective_cp < TACTIC_THRESHOLD_CP or move.analysis_after.best_move is None:
             return None
         return _motif(move, motif_id, loss, phase, threshold=TACTIC_THRESHOLD_CP)
+
+    if motif_id in {"pin", "fork", "overloaded_defender", "discovered_attack"}:
+        return None
 
     return None
 

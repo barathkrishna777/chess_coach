@@ -336,6 +336,7 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
           </p>
         ) : null}
 
+        {game.opening ? <OpeningSummary opening={game.opening} /> : null}
         <ReviewSummary moves={game.moves} />
 
         <div className="grid gap-5 xl:grid-cols-[minmax(260px,1fr)_minmax(260px,0.9fr)]">
@@ -369,6 +370,19 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
         </p>
       </div>
     </section>
+  );
+}
+
+function OpeningSummary({ opening }: { opening: { eco: string; name: string } }) {
+  return (
+    <div className="rounded-md border border-[#d5ddd8] bg-white px-4 py-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
+        Opening
+      </p>
+      <p className="mt-1 text-sm font-medium text-[#17201d]">
+        {opening.eco} {"—"} {opening.name}
+      </p>
+    </div>
   );
 }
 

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from chess_ml.classifier.classify import classify_moves
 from chess_ml.classifier.motifs import AnalyzedMove, MotifEvidence, MoveRef, PieceRef
 from chess_ml.classifier.motifs import Motif as ClassifiedMotif
+from chess_ml.classifier.openings import OpeningTag, detect_opening
 from chess_ml.engine.stockfish import (
     CentipawnScore,
     EngineEvaluation,
@@ -88,6 +89,13 @@ class PlayersModel(BaseModel):
     black: PlayerModel
 
 
+class OpeningTagModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    eco: str
+    name: str
+
+
 class MoveRefModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -156,6 +164,10 @@ class MotifModel(BaseModel):
         "allowed_tactic",
         "endgame_slip",
         "opening_inaccuracy",
+        "pin",
+        "fork",
+        "overloaded_defender",
+        "discovered_attack",
     ]
     label: str
     severity: Literal["inaccuracy", "mistake", "blunder"]
@@ -249,6 +261,7 @@ class AnnotatedGameModel(BaseModel):
     headers: dict[str, str]
     players: PlayersModel
     result: Literal["1-0", "0-1", "1/2-1/2", "*"]
+    opening: OpeningTagModel | None
     initial_fen: str
     final_fen: str
     analysis: AnalysisSummaryModel
@@ -336,6 +349,10 @@ async def annotate_game(
         for move in parsed_game.moves
     ]
     motif_lists = classify_moves(analyzed_moves, initial_fen=parsed_game.initial_fen)
+    opening = detect_opening(
+        [move.uci for move in parsed_game.moves],
+        initial_fen=parsed_game.initial_fen,
+    )
     annotated_moves = [
         _annotate_move(
             move,
@@ -354,6 +371,7 @@ async def annotate_game(
         headers=parsed_game.headers,
         players=_players(parsed_game.headers),
         result=_result(parsed_game.result),
+        opening=_opening_tag_model(opening),
         initial_fen=parsed_game.initial_fen,
         final_fen=parsed_game.final_fen,
         analysis=AnalysisSummaryModel(
@@ -596,6 +614,12 @@ def _required_move_ref_model(move: EngineMove) -> MoveRefModel:
     return MoveRefModel(uci=move.uci, san=move.san)
 
 
+def _opening_tag_model(opening: OpeningTag | None) -> OpeningTagModel | None:
+    if opening is None:
+        return None
+    return OpeningTagModel(eco=opening.eco, name=opening.name)
+
+
 def _engine_move(move: MoveRefModel | None) -> EngineMove | None:
     if move is None:
         return None
@@ -742,6 +766,8 @@ def profile_review_from_game(game: AnnotatedGameModel) -> ProfileGameReview:
         result=game.result,
         source=_profile_source(game.headers),
         ply_count=len(game.moves),
+        eco_code=game.opening.eco if game.opening is not None else None,
+        opening_name=game.opening.name if game.opening is not None else None,
         motif_occurrences=tuple(
             ProfileMotifOccurrence(
                 ply=move.ply,

@@ -21,6 +21,10 @@ LABEL_ORDER: tuple[MotifId, ...] = (
     "allowed_tactic",
     "endgame_slip",
     "opening_inaccuracy",
+    "pin",
+    "fork",
+    "overloaded_defender",
+    "discovered_attack",
 )
 
 

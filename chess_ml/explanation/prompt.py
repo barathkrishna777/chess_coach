@@ -24,9 +24,13 @@ Return strict JSON only: {"text":"...","referenced_move_uci":"..."}. The text mu
 
 SEVERITY_RANK: Mapping[str, int] = {"blunder": 3, "mistake": 2, "inaccuracy": 1}
 MOTIF_RANK: Mapping[str, int] = {
-    "allowed_tactic": 5,
-    "missed_tactic": 4,
-    "endgame_slip": 3,
+    "allowed_tactic": 9,
+    "missed_tactic": 8,
+    "endgame_slip": 7,
+    "fork": 6,
+    "pin": 5,
+    "discovered_attack": 4,
+    "overloaded_defender": 3,
     "hanging_piece": 2,
     "opening_inaccuracy": 1,
 }
@@ -62,9 +66,7 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
     """Build the grounded prompt for one flagged move."""
 
     primary = primary_motif(request.motifs)
-    line_source: Literal["before", "after"] = (
-        "after" if primary.id in TACTIC_AFTER_MOTIFS else "before"
-    )
+    line_source = _line_source(primary, request)
     line_analysis = request.analysis_after if line_source == "after" else request.analysis_before
     expected_move = line_analysis.best_move
     facts = {
@@ -142,6 +144,22 @@ def primary_motif(motifs: tuple[Motif, ...]) -> Motif:
             motif.id,
         ),
     )
+
+
+def _line_source(
+    primary: Motif,
+    request: ExplanationRequest,
+) -> Literal["before", "after"]:
+    if primary.id in TACTIC_AFTER_MOTIFS:
+        return "after"
+    evidence_move = primary.evidence.best_move
+    if (
+        evidence_move is not None
+        and request.analysis_after.best_move is not None
+        and evidence_move.uci == request.analysis_after.best_move.uci
+    ):
+        return "after"
+    return "before"
 
 
 def validate_provider_response(raw_text: str, prompt: BuiltPrompt) -> ValidatedExplanation:
@@ -428,6 +446,20 @@ def _fallback_lesson(motif: Motif) -> str:
     if motif.id == "hanging_piece" and evidence.piece is not None:
         piece = evidence.piece
         return f"Lesson: count attacks and defenders on the {piece.role} on {piece.square}."
+    if motif.id == "pin" and evidence.piece is not None:
+        piece = evidence.piece
+        return f"Lesson: before moving, check whether the {piece.role} on {piece.square} is pinned."
+    if motif.id == "fork" and evidence.piece is not None:
+        piece = evidence.piece
+        return f"Lesson: look for one {piece.role} attacking two valuable targets."
+    if motif.id == "overloaded_defender" and evidence.piece is not None:
+        piece = evidence.piece
+        return (
+            f"Lesson: notice when the {piece.role} on {piece.square} has too many defensive jobs."
+        )
+    if motif.id == "discovered_attack" and evidence.piece is not None:
+        piece = evidence.piece
+        return f"Lesson: check whether moving a blocker opens the {piece.role} on {piece.square}."
     if motif.id == "opening_inaccuracy":
         return "Lesson: save this engine line as the concrete opening improvement to review."
     return "Lesson: use the Stockfish line as the concrete correction for this position."

@@ -70,6 +70,8 @@ class ProfileGameReview:
     source: GameSource
     ply_count: int
     motif_occurrences: tuple[ProfileMotifOccurrence, ...]
+    eco_code: str | None = None
+    opening_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,35 @@ class RecentProfileGame:
     updated_at: str
     ply_count: int
     flagged_moves: int
+    opening: ProfileOpeningTag | None
+
+
+@dataclass(frozen=True)
+class ProfileOpeningTag:
+    """Opening metadata attached to a reviewed game."""
+
+    eco: str
+    name: str
+
+
+@dataclass(frozen=True)
+class OpeningTopMotif:
+    """Most frequent motif for one opening aggregate."""
+
+    id: str
+    label: str
+    count: int
+
+
+@dataclass(frozen=True)
+class OpeningAggregate:
+    """Aggregate profile facts for one detected opening."""
+
+    eco: str
+    name: str
+    games: int
+    avg_loss_cp: float
+    top_motif: OpeningTopMotif | None
 
 
 @dataclass(frozen=True)
@@ -123,6 +154,7 @@ class ProfileDashboard:
     totals: ProfileTotals
     motifs: tuple[MotifAggregate, ...]
     phase_breakdown: tuple[PhaseAggregate, ...]
+    openings: tuple[OpeningAggregate, ...]
     recent_games: tuple[RecentProfileGame, ...]
 
 
@@ -240,10 +272,12 @@ class ProfileStore:
                     result,
                     source,
                     ply_count,
+                    eco_code,
+                    opening_name,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
                     white_name = excluded.white_name,
                     white_elo = excluded.white_elo,
@@ -252,6 +286,8 @@ class ProfileStore:
                     result = excluded.result,
                     source = excluded.source,
                     ply_count = excluded.ply_count,
+                    eco_code = excluded.eco_code,
+                    opening_name = excluded.opening_name,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -263,6 +299,8 @@ class ProfileStore:
                     review.result,
                     review.source,
                     review.ply_count,
+                    review.eco_code,
+                    review.opening_name,
                     timestamp,
                     timestamp,
                 ),
@@ -664,6 +702,72 @@ class ProfileStore:
                 for phase in PHASES
             )
 
+            top_motifs_by_opening = {
+                (str(row["eco_code"]), str(row["opening_name"])): OpeningTopMotif(
+                    id=str(row["motif_id"]),
+                    label=str(row["motif_label"]),
+                    count=_int(row["count"]),
+                )
+                for row in connection.execute(
+                    """
+                    SELECT eco_code, opening_name, motif_id, motif_label, count
+                    FROM (
+                        SELECT
+                            games.eco_code,
+                            games.opening_name,
+                            occurrences.motif_id,
+                            occurrences.motif_label,
+                            COUNT(*) AS count,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY games.eco_code, games.opening_name
+                                ORDER BY COUNT(*) DESC,
+                                         occurrences.motif_label ASC,
+                                         occurrences.motif_id ASC
+                            ) AS rank
+                        FROM profile_games AS games
+                        INNER JOIN profile_motif_occurrences AS occurrences
+                            ON games.game_id = occurrences.game_id
+                        WHERE games.eco_code IS NOT NULL
+                            AND games.opening_name IS NOT NULL
+                        GROUP BY
+                            games.eco_code,
+                            games.opening_name,
+                            occurrences.motif_id,
+                            occurrences.motif_label
+                    )
+                    WHERE rank = 1
+                    """
+                )
+            }
+            openings = tuple(
+                OpeningAggregate(
+                    eco=str(row["eco_code"]),
+                    name=str(row["opening_name"]),
+                    games=_int(row["games"]),
+                    avg_loss_cp=round(float(row["avg_loss_cp"]), 2),
+                    top_motif=top_motifs_by_opening.get(
+                        (str(row["eco_code"]), str(row["opening_name"]))
+                    ),
+                )
+                for row in connection.execute(
+                    """
+                    SELECT
+                        games.eco_code,
+                        games.opening_name,
+                        COUNT(DISTINCT games.game_id) AS games,
+                        COALESCE(AVG(occurrences.loss_cp), 0.0) AS avg_loss_cp
+                    FROM profile_games AS games
+                    LEFT JOIN profile_motif_occurrences AS occurrences
+                        ON games.game_id = occurrences.game_id
+                        AND occurrences.loss_cp IS NOT NULL
+                    WHERE games.eco_code IS NOT NULL
+                        AND games.opening_name IS NOT NULL
+                    GROUP BY games.eco_code, games.opening_name
+                    ORDER BY games DESC, avg_loss_cp DESC, games.opening_name ASC
+                    """
+                )
+            )
+
             recent_games = tuple(
                 _recent_game(row)
                 for row in connection.execute(
@@ -679,6 +783,8 @@ class ProfileStore:
                         games.created_at,
                         games.updated_at,
                         games.ply_count,
+                        games.eco_code,
+                        games.opening_name,
                         COUNT(flagged.ply) AS flagged_moves
                     FROM profile_games AS games
                     LEFT JOIN (
@@ -705,6 +811,7 @@ class ProfileStore:
             ),
             motifs=motifs,
             phase_breakdown=phase_breakdown,
+            openings=openings,
             recent_games=recent_games,
         )
 
@@ -723,10 +830,20 @@ class ProfileStore:
                     result TEXT NOT NULL,
                     source TEXT NOT NULL,
                     ply_count INTEGER NOT NULL,
+                    eco_code TEXT,
+                    opening_name TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
+            )
+            _ensure_columns(
+                connection,
+                "profile_games",
+                {
+                    "eco_code": "TEXT",
+                    "opening_name": "TEXT",
+                },
             )
             connection.execute(
                 """
@@ -778,6 +895,12 @@ class ProfileStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_profile_games_updated
                 ON profile_games(updated_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_profile_games_opening
+                ON profile_games(eco_code, opening_name)
                 """
             )
             connection.execute(
@@ -835,7 +958,16 @@ def _recent_game(row: sqlite3.Row) -> RecentProfileGame:
         updated_at=str(row["updated_at"]),
         ply_count=_int(row["ply_count"]),
         flagged_moves=_int(row["flagged_moves"]),
+        opening=_opening_tag(row["eco_code"], row["opening_name"]),
     )
+
+
+def _opening_tag(eco_code: object, opening_name: object) -> ProfileOpeningTag | None:
+    eco = _optional_str(eco_code)
+    name = _optional_str(opening_name)
+    if eco is None or name is None:
+        return None
+    return ProfileOpeningTag(eco=eco, name=name)
 
 
 def _drill_position(row: sqlite3.Row) -> DrillPosition:
