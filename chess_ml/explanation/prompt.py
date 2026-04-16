@@ -6,7 +6,9 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
+
+import chess
 
 from chess_ml.classifier.motifs import Motif, MoveRef
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
@@ -159,12 +161,46 @@ def validate_provider_response(raw_text: str, prompt: BuiltPrompt) -> ValidatedE
         raise InvalidExplanationResponseError("Explanation text must be a non-empty string.")
     if referenced_move is not None and not isinstance(referenced_move, str):
         raise InvalidExplanationResponseError("referenced_move_uci must be a string or null.")
-    if not _references_engine_move(text, referenced_move, prompt):
+    if not _references_engine_line(text, referenced_move, prompt):
         raise InvalidExplanationResponseError("Explanation referenced a non-engine move.")
+    if _claims_different_engine_move(text, prompt):
+        raise InvalidExplanationResponseError("Explanation claimed a different engine move.")
     text = _trim_to_sentence_limit(text, max_sentences=3)
     text = _trim_to_word_limit(text, max_words=80)
 
     return ValidatedExplanation(text=text.strip(), response_json=parsed)
+
+
+def build_fallback_explanation(request: ExplanationRequest, prompt: BuiltPrompt) -> str:
+    """Build a deterministic explanation from supplied Stockfish and motif facts only."""
+
+    primary = primary_motif(request.motifs)
+    best_move = _ground_truth_best_move(prompt)
+    pv = _ground_truth_pv(prompt)
+    line_source = prompt.facts["engine"]["line_source"]
+    line_label = "best reply after that move" if line_source == "after" else "best move there"
+    sentences = [f"Played {request.san} ({request.uci})."]
+
+    if best_move is not None:
+        best_label = _move_label(best_move)
+        pv_label = _line_label(pv)
+        if pv_label:
+            sentences.append(f"Stockfish's {line_label} was {best_label}, with PV {pv_label}.")
+        else:
+            sentences.append(f"Stockfish's {line_label} was {best_label}.")
+    elif pv:
+        sentences.append(f"Stockfish's supplied PV was {_line_label(pv)}.")
+
+    details = [
+        f"{_phase_label(primary.evidence.phase)} {primary.label.lower()}",
+        _loss_label(request.loss_cp),
+        _motif_evidence_label(primary),
+    ]
+    detail_text = "; ".join(detail for detail in details if detail)
+    if detail_text:
+        sentences.append(f"Grounding: {detail_text}.")
+
+    return " ".join(sentences)
 
 
 def _analysis_payload(analysis: EngineEvaluation) -> dict[str, Any]:
@@ -242,23 +278,147 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
     return parsed
 
 
-def _references_engine_move(
+def _references_engine_line(
     text: str,
     referenced_move: str | None,
     prompt: BuiltPrompt,
 ) -> bool:
-    expected_refs = {
-        ref
-        for ref in (prompt.expected_move_uci, prompt.expected_move_san)
-        if ref is not None and ref.strip()
-    }
-    if not expected_refs:
+    engine_refs = _engine_line_refs(prompt)
+    if not engine_refs:
         return referenced_move is None
     if referenced_move is None:
-        return any(ref in text for ref in expected_refs)
-    if referenced_move in expected_refs:
-        return True
-    return any(ref in text for ref in expected_refs)
+        return _text_contains_any_ref(text, engine_refs)
+    if referenced_move != prompt.expected_move_uci:
+        return False
+    return _text_contains_any_ref(text, engine_refs)
+
+
+def _claims_different_engine_move(text: str, prompt: BuiltPrompt) -> bool:
+    allowed_refs = _engine_line_refs(prompt)
+    if not allowed_refs:
+        return False
+
+    legal_refs = _legal_move_refs(prompt)
+    disallowed_refs = legal_refs - allowed_refs
+    if not disallowed_refs:
+        return False
+
+    claim_patterns = (
+        r"\b(?:stockfish|engine|best|recommended|recommendation|wanted|better)\b",
+        r"\bshould\s+have\s+played\b",
+        r"\bwas\s+best\b",
+    )
+    sentences = [fragment for fragment in re.split(r"(?<=[.!?])\s+", text) if fragment.strip()]
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if not any(re.search(pattern, lowered) for pattern in claim_patterns):
+            continue
+        if _text_contains_any_ref(sentence, disallowed_refs):
+            return True
+    return False
+
+
+def _engine_line_refs(prompt: BuiltPrompt) -> set[str]:
+    refs: set[str] = set()
+    best_move = _ground_truth_best_move(prompt)
+    if best_move is not None:
+        refs.update(_refs_for_move(best_move))
+    for move in _ground_truth_pv(prompt):
+        refs.update(_refs_for_move(move))
+    return refs
+
+
+def _legal_move_refs(prompt: BuiltPrompt) -> set[str]:
+    facts = prompt.facts
+    position = facts["position"]
+    engine = facts["engine"]
+    fen = position["fen_after"] if engine["line_source"] == "after" else position["fen_before"]
+    if not isinstance(fen, str):
+        return set()
+
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return set()
+
+    refs: set[str] = set()
+    for move in board.legal_moves:
+        refs.add(move.uci())
+        refs.add(board.san(move))
+    return refs
+
+
+def _ground_truth_best_move(prompt: BuiltPrompt) -> dict[str, str] | None:
+    move = prompt.facts["engine"]["ground_truth_best_move"]
+    if not _is_move_payload(move):
+        return None
+    return cast(dict[str, str], move)
+
+
+def _ground_truth_pv(prompt: BuiltPrompt) -> list[dict[str, str]]:
+    pv = prompt.facts["engine"]["ground_truth_pv"]
+    if not isinstance(pv, list):
+        return []
+    return [move for move in pv if _is_move_payload(move)]
+
+
+def _is_move_payload(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return isinstance(value.get("uci"), str) and isinstance(value.get("san"), str)
+
+
+def _refs_for_move(move: dict[str, str]) -> set[str]:
+    return {move["uci"], move["san"]}
+
+
+def _text_contains_any_ref(text: str, refs: set[str]) -> bool:
+    return any(_text_contains_ref(text, ref) for ref in refs if ref.strip())
+
+
+def _text_contains_ref(text: str, ref: str) -> bool:
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(ref)}(?![A-Za-z0-9])", text) is not None
+
+
+def _move_label(move: dict[str, str]) -> str:
+    return f"{move['san']} ({move['uci']})"
+
+
+def _line_label(pv: list[dict[str, str]]) -> str:
+    return " ".join(_move_label(move) for move in pv[:4])
+
+
+def _phase_label(phase: str) -> str:
+    if phase == "opening":
+        return "opening-phase"
+    if phase == "middlegame":
+        return "middlegame"
+    return "endgame"
+
+
+def _loss_label(loss_cp: int | None) -> str | None:
+    if loss_cp is None:
+        return None
+    if loss_cp == 0:
+        return "no recorded centipawn loss"
+    return f"recorded loss {loss_cp / 100:.2f} pawns"
+
+
+def _motif_evidence_label(motif: Motif) -> str:
+    evidence = motif.evidence
+    if evidence.piece is not None:
+        piece = evidence.piece
+        parts = [f"{piece.color} {piece.role} on {piece.square}"]
+        if evidence.attackers:
+            parts.append(f"attackers {', '.join(evidence.attackers)}")
+        if evidence.defenders:
+            parts.append(f"defenders {', '.join(evidence.defenders)}")
+        return "; ".join(parts)
+    if evidence.opponent_reply is not None:
+        return f"opponent reply {evidence.opponent_reply.san} ({evidence.opponent_reply.uci})"
+    if evidence.best_move is not None:
+        return f"motif best move {evidence.best_move.san} ({evidence.best_move.uci})"
+    return ""
 
 
 def _trim_to_sentence_limit(text: str, *, max_sentences: int) -> str:

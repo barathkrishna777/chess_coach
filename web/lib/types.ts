@@ -51,7 +51,7 @@ export type MoveExplanation = {
   schema_version: "move-explanation.v1";
   status: "ok" | "unavailable" | "error";
   text: string | null;
-  source: "cache" | "llm" | null;
+  source: "cache" | "llm" | "fallback" | null;
   provider: "anthropic" | "codex" | "ollama" | null;
   model: string | null;
   prompt_version: "grounded-coach.v1";

@@ -162,7 +162,7 @@ class MoveExplanationModel(BaseModel):
     schema_version: Literal["move-explanation.v1"]
     status: Literal["ok", "unavailable", "error"]
     text: str | None
-    source: Literal["cache", "llm"] | None
+    source: Literal["cache", "llm", "fallback"] | None
     provider: Literal["anthropic", "codex", "ollama"] | None
     model: str | None
     prompt_version: Literal["grounded-coach.v1"]

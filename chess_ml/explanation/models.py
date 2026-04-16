@@ -13,7 +13,7 @@ PROMPT_VERSION = "grounded-coach.v1"
 EXPLANATION_SCHEMA_VERSION = "move-explanation.v1"
 
 ExplanationProvider: TypeAlias = Literal["anthropic", "codex", "ollama"]
-ExplanationSource: TypeAlias = Literal["cache", "llm"]
+ExplanationSource: TypeAlias = Literal["cache", "llm", "fallback"]
 ExplanationStatus: TypeAlias = Literal["ok", "unavailable", "error"]
 ExplanationReason: TypeAlias = Literal[
     "api_key_missing",

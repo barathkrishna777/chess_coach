@@ -32,7 +32,13 @@ from chess_ml.explanation.models import (
     LineMove,
     MoveExplanation,
 )
-from chess_ml.explanation.prompt import SYSTEM_PROMPT, build_prompt, validate_provider_response
+from chess_ml.explanation.prompt import (
+    SYSTEM_PROMPT,
+    InvalidExplanationResponseError,
+    build_fallback_explanation,
+    build_prompt,
+    validate_provider_response,
+)
 from chess_ml.explanation.service import ExplanationService
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, parse_pgn
 
@@ -123,7 +129,7 @@ def test_validation_accepts_wrapped_json_and_san_reference() -> None:
     prompt = build_prompt(_missed_tactic_request())
 
     validated = validate_provider_response(
-        '```json\n{"text":"Stockfish wanted Nxd5 from c3, winning the queen on d5. Check forcing captures before developing.","referenced_move_uci":"Nxd5"}\n```',
+        '```json\n{"text":"Stockfish wanted Nxd5 from c3, improving the supplied engine line. Check forcing captures before developing.","referenced_move_uci":"c3d5"}\n```',
         prompt,
     )
 
@@ -140,6 +146,36 @@ def test_validation_trims_long_local_model_answer() -> None:
 
     assert validated.text.count(".") == 3
     assert "Extra sentence" not in validated.text
+
+
+def test_validation_rejects_wrong_referenced_move_uci() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
+    with pytest.raises(InvalidExplanationResponseError):
+        validate_provider_response(
+            '{"text":"Stockfish wanted Nxd5 from c3, improving the supplied engine line.","referenced_move_uci":"a2a3"}',
+            prompt,
+        )
+
+
+def test_validation_rejects_invented_best_move_in_text() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
+    with pytest.raises(InvalidExplanationResponseError):
+        validate_provider_response(
+            '{"text":"Stockfish recommended a3 as the best move, though Nxd5 was also in the line.","referenced_move_uci":"c3d5"}',
+            prompt,
+        )
+
+
+def test_validation_rejects_generic_advice_without_engine_line() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
+    with pytest.raises(InvalidExplanationResponseError):
+        validate_provider_response(
+            '{"text":"You should look for forcing moves before playing quiet development.","referenced_move_uci":"c3d5"}',
+            prompt,
+        )
 
 
 def test_missing_api_key_returns_unavailable(tmp_path: Path) -> None:
@@ -222,7 +258,7 @@ def test_cache_hit_skips_client_call(tmp_path: Path) -> None:
     assert client.calls == 1
 
 
-def test_invalid_provider_response_is_not_cached(tmp_path: Path) -> None:
+def test_invalid_provider_response_returns_uncached_fallback(tmp_path: Path) -> None:
     request = _missed_tactic_request()
     client = _FakeClient(
         '{"text":"Play a3 instead. That is the lesson.","referenced_move_uci":"a2a3"}'
@@ -233,10 +269,32 @@ def test_invalid_provider_response_is_not_cached(tmp_path: Path) -> None:
     explanation = asyncio.run(service.explain(request))
 
     assert explanation is not None
-    assert explanation.status == "error"
+    assert explanation.status == "ok"
+    assert explanation.source == "fallback"
+    assert explanation.text is not None
+    assert "Play a3 instead" not in explanation.text
+    assert "Nxd5" in explanation.text
+    assert "c3d5" in explanation.text
     assert explanation.reason == "invalid_response"
-    assert explanation.retryable is True
+    assert explanation.retryable is False
     assert cache.get(cache_key_for_facts(build_prompt(request).facts)) is None
+
+
+def test_fallback_explanation_uses_only_supplied_stockfish_and_motif_facts() -> None:
+    request = _missed_tactic_request()
+    prompt = build_prompt(request)
+
+    text = build_fallback_explanation(request, prompt)
+
+    assert request.san in text
+    assert request.uci in text
+    assert "Nxd5" in text
+    assert "c3d5" in text
+    assert "missed tactic" in text.lower()
+    assert "6.55 pawns" in text
+    assert "queen" not in text.lower()
+    assert "fork" not in text.lower()
+    assert "a3" not in text
 
 
 def test_explanation_status_endpoint_does_not_contact_provider(tmp_path: Path) -> None:

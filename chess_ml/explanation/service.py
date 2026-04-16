@@ -18,6 +18,7 @@ from chess_ml.explanation.client import (
 from chess_ml.explanation.models import ExplanationProvider, ExplanationRequest, MoveExplanation
 from chess_ml.explanation.prompt import (
     InvalidExplanationResponseError,
+    build_fallback_explanation,
     build_prompt,
     validate_provider_response,
 )
@@ -140,15 +141,16 @@ class ExplanationService:
         try:
             validated = validate_provider_response(raw_response.content, prompt)
         except InvalidExplanationResponseError:
+            fallback_text = build_fallback_explanation(request, prompt)
             return MoveExplanation(
-                status="error",
-                text=None,
-                source=None,
+                status="ok",
+                text=fallback_text,
+                source="fallback",
                 provider=raw_response.provider,
                 model=raw_response.model,
                 reason="invalid_response",
                 timeout_seconds=self.timeout_seconds,
-                retryable=True,
+                retryable=False,
             )
 
         self.cache.set(

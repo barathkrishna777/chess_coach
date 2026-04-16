@@ -64,9 +64,9 @@ evaluation, motifs, and explanations.
 
 Coach notes are intentionally lazy: the app asks for one only when you click
 `Generate coach note` on a flagged move. Stockfish and the motif classifier provide the
-grounding facts; the LLM only turns those facts into short teaching text. Failed,
-timed-out, or untrusted model responses are not cached and never become fallback chess
-advice.
+grounding facts; the LLM only turns those facts into short teaching text. Timed-out
+or failed provider calls are not cached. Untrusted model responses are rejected and
+not cached; the UI may show a deterministic Stockfish-grounded fallback instead.
 
 Configuration:
 
