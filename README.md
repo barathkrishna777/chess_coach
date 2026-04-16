@@ -106,27 +106,32 @@ ollama serve
 
 ## Learned classifier
 
-Slice 8 adds an optional local PyTorch classifier on top of the heuristic motif
-baseline. Heuristics always run. If no compatible checkpoint exists at
-`checkpoints/classifier/slice8-v1.pt`, review stays on heuristic v0 and `make serve`
-continues to work on a fresh clone.
+Slice 16 adds an optional local PyTorch classifier on top of the heuristic motif
+baseline using a reproducible real Lichess training run. Heuristics always run.
+If no compatible checkpoint exists at `checkpoints/classifier/slice16-lichess-v1.pt`,
+review stays on heuristic v0 and `make serve` continues to work on a fresh clone.
 
-The default config is `configs/classifier/slice8-v1.toml`. It uses a tiny checked-in
-fixture PGN so the full path can run without downloading Lichess data:
+The default config is `configs/classifier/slice16-lichess-v1.toml`. It downloads
+the configured Lichess archive only when the ignored raw file is missing, builds
+the ignored parquet dataset, and trains the ignored local checkpoint:
 
 ```bash
 make ingest
 make train
 ```
 
-`make ingest` writes weak-labeled parquet examples to `data/processed/`.
-`make train` refreshes the gitignored checkpoint and writes the reproducible eval
-report at `docs/evals/009-slice8-classifier-v1.json`.
+`make ingest` writes weak-labeled parquet examples to
+`data/processed/slice16-lichess-v1.parquet`. `make train` refreshes the
+gitignored checkpoint at `checkpoints/classifier/slice16-lichess-v1.pt` and writes
+the reproducible eval report at `docs/evals/016-lichess-classifier-v1.json`.
+
+The original Slice 8 fixture smoke config remains available at
+`configs/classifier/slice8-v1.toml` for quick local classifier-path checks.
 
 Configuration:
 
 - `CHESS_ML_CLASSIFIER_CONFIG`: optional config path. Default
-  `configs/classifier/slice8-v1.toml`.
+  `configs/classifier/slice16-lichess-v1.toml`.
 - `CHESS_ML_CLASSIFIER_CHECKPOINT`: optional checkpoint path. Default comes from the
   config. Set it to an empty string to force heuristic-only classification.
 

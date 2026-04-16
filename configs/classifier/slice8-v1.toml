@@ -1,4 +1,5 @@
 [run]
+slice = "slice8-v1"
 seed = 20260416
 
 [data]

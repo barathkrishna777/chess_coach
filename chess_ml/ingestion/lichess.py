@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TextIO
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import chess
 import chess.pgn
@@ -65,6 +67,8 @@ class IngestionSummary:
     dataset_path: Path
     games_read: int
     examples_written: int
+    source_url: str | None = None
+    raw_sha256: str | None = None
 
 
 async def ingest_from_config(config_path: str | Path | None = None) -> IngestionSummary:
@@ -89,12 +93,16 @@ async def build_dataset(
 ) -> IngestionSummary:
     """Read local PGNs, evaluate positions, weak-label them, and write parquet."""
 
+    source_pgn = ensure_source_pgn(config)
     examples: list[LabeledPositionExample] = []
     games_read = 0
     for parsed_game in read_standard_games(
-        config.source_pgn,
+        source_pgn,
         max_games=config.max_games,
         max_plies=config.max_plies_per_game,
+        min_elo=config.min_elo,
+        max_elo=config.max_elo,
+        rated_only=config.rated_only,
     ):
         games_read += 1
         evaluations = await evaluate_game_positions(
@@ -103,14 +111,50 @@ async def build_dataset(
             depth=config.analysis_depth,
         )
         examples.extend(examples_for_game(parsed_game, evaluations))
+        if config.target_examples is not None and len(examples) >= config.target_examples:
+            break
 
     write_examples_parquet(examples, config.dataset_path)
     return IngestionSummary(
-        source_pgn=config.source_pgn,
+        source_pgn=source_pgn,
         dataset_path=config.dataset_path,
         games_read=games_read,
         examples_written=len(examples),
+        source_url=config.source_url,
+        raw_sha256=sha256_file(source_pgn) if source_pgn.exists() else None,
     )
+
+
+def ensure_source_pgn(config: ClassifierConfig) -> Path:
+    """Return a local PGN path, downloading the configured source if needed."""
+
+    source_path = config.raw_path or config.source_pgn
+    if source_path.exists():
+        _validate_source_hash(source_path, config.source_sha256)
+        return source_path
+    if config.source_url is None:
+        return config.source_pgn
+
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = source_path.with_suffix(source_path.suffix + ".tmp")
+    try:
+        with (
+            urlopen(config.source_url, timeout=60) as response,
+            temporary_path.open("wb") as output,
+        ):
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+    except (OSError, URLError) as exc:
+        if temporary_path.exists():
+            temporary_path.unlink()
+        raise RuntimeError(f"Could not download classifier source data: {exc}") from exc
+
+    _validate_source_hash(temporary_path, config.source_sha256)
+    temporary_path.replace(source_path)
+    return source_path
 
 
 def read_standard_games(
@@ -118,6 +162,9 @@ def read_standard_games(
     *,
     max_games: int,
     max_plies: int,
+    min_elo: int | None = None,
+    max_elo: int | None = None,
+    rated_only: bool = False,
 ) -> Iterator[ParsedPgnGame]:
     """Yield standard parsed games from a local PGN-like file."""
 
@@ -127,6 +174,14 @@ def read_standard_games(
             game = chess.pgn.read_game(stream)
             if game is None:
                 return
+            headers = {str(key): str(value) for key, value in game.headers.items()}
+            if not _eligible_headers(
+                headers,
+                min_elo=min_elo,
+                max_elo=max_elo,
+                rated_only=rated_only,
+            ):
+                continue
             try:
                 parsed = parse_pgn(_game_to_pgn(game), max_plies=max_plies)
             except PgnParseError:
@@ -309,6 +364,69 @@ def _loss_cp(side: Side, before: EngineScore, after: EngineScore) -> int | None:
 
 def _game_id(normalized_pgn: str) -> str:
     return f"sha256:{hashlib.sha256(normalized_pgn.encode('utf-8')).hexdigest()}"
+
+
+def sha256_file(path: str | Path) -> str:
+    """Return the SHA-256 digest for a local file."""
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_source_hash(path: Path, expected: str | None) -> None:
+    if expected is None:
+        return
+    actual = sha256_file(path)
+    if actual != expected:
+        raise ValueError(
+            f"Classifier source hash mismatch for {path}: expected {expected}, got {actual}."
+        )
+
+
+def _eligible_headers(
+    headers: dict[str, str],
+    *,
+    min_elo: int | None,
+    max_elo: int | None,
+    rated_only: bool,
+) -> bool:
+    if rated_only:
+        rated_header = headers.get("Rated")
+        if rated_header is not None:
+            if rated_header.strip().lower() not in {"true", "1", "yes"}:
+                return False
+        elif "rated" not in headers.get("Event", "").strip().lower():
+            return False
+
+    variant = headers.get("Variant", "").strip().lower()
+    if variant and variant not in {"standard", "chess"}:
+        return False
+
+    white_elo = _elo(headers.get("WhiteElo"))
+    black_elo = _elo(headers.get("BlackElo"))
+    if min_elo is not None or max_elo is not None:
+        if white_elo is None or black_elo is None:
+            return False
+        if min_elo is not None and (white_elo < min_elo or black_elo < min_elo):
+            return False
+        if max_elo is not None and (white_elo > max_elo or black_elo > max_elo):
+            return False
+    return True
+
+
+def _elo(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _game_to_pgn(game: chess.pgn.Game) -> str:

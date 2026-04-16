@@ -1,4 +1,4 @@
-"""Configuration for the Slice 8 learned classifier."""
+"""Configuration for the learned motif classifier."""
 
 from __future__ import annotations
 
@@ -10,10 +10,13 @@ from typing import cast
 
 from chess_ml.classifier.motifs import MotifId
 
-DEFAULT_CLASSIFIER_CONFIG_PATH = Path("configs/classifier/slice8-v1.toml")
-DEFAULT_CLASSIFIER_CHECKPOINT_PATH = Path("checkpoints/classifier/slice8-v1.pt")
-DEFAULT_CLASSIFIER_DATASET_PATH = Path("data/processed/slice8-v1.parquet")
-DEFAULT_CLASSIFIER_EVAL_REPORT_PATH = Path("docs/evals/009-slice8-classifier-v1.json")
+DEFAULT_CLASSIFIER_CONFIG_PATH = Path("configs/classifier/slice16-lichess-v1.toml")
+DEFAULT_CLASSIFIER_CHECKPOINT_PATH = Path("checkpoints/classifier/slice16-lichess-v1.pt")
+DEFAULT_CLASSIFIER_DATASET_PATH = Path("data/processed/slice16-lichess-v1.parquet")
+DEFAULT_CLASSIFIER_EVAL_REPORT_PATH = Path("docs/evals/016-lichess-classifier-v1.json")
+DEFAULT_LICHESS_SOURCE_URL = (
+    "https://database.lichess.org/standard/lichess_db_standard_rated_2013-01.pgn.zst"
+)
 
 LABEL_ORDER: tuple[MotifId, ...] = (
     "hanging_piece",
@@ -47,6 +50,15 @@ class ClassifierConfig:
     train_fraction: float
     eval_report_path: Path
     thresholds: dict[MotifId, float]
+    slice_name: str = "slice16-lichess-v1"
+    source_url: str | None = None
+    raw_path: Path | None = None
+    source_sha256: str | None = None
+    target_examples: int | None = None
+    min_elo: int | None = None
+    max_elo: int | None = None
+    rated_only: bool = False
+    validation_fraction: float = 0.15
 
 
 def load_classifier_config(path: str | Path = DEFAULT_CLASSIFIER_CONFIG_PATH) -> ClassifierConfig:
@@ -60,10 +72,13 @@ def load_classifier_config(path: str | Path = DEFAULT_CLASSIFIER_CONFIG_PATH) ->
     training = _section(raw, "training")
     eval_section = _section(raw, "eval")
     thresholds = _section(raw, "thresholds")
+    raw_path = _optional_path(data, "raw_path")
+    default_source = raw_path or Path("tests/fixtures/classifier/slice8-mini.pgn")
+    config_name = config_path.stem
 
     return ClassifierConfig(
         seed=_int(run, "seed", 20260416),
-        source_pgn=_path(data, "source_pgn", Path("tests/fixtures/classifier/slice8-mini.pgn")),
+        source_pgn=_path(data, "source_pgn", default_source),
         dataset_path=_path(data, "dataset_path", DEFAULT_CLASSIFIER_DATASET_PATH),
         max_games=_int(data, "max_games", 8),
         max_plies_per_game=_int(data, "max_plies_per_game", 80),
@@ -81,6 +96,15 @@ def load_classifier_config(path: str | Path = DEFAULT_CLASSIFIER_CONFIG_PATH) ->
             DEFAULT_CLASSIFIER_EVAL_REPORT_PATH,
         ),
         thresholds={label: _float(thresholds, label, 0.62) for label in LABEL_ORDER},
+        slice_name=_str(run, "slice", config_name),
+        source_url=_optional_str(data, "source_url"),
+        raw_path=raw_path,
+        source_sha256=_optional_str(data, "source_sha256"),
+        target_examples=_optional_int(data, "target_examples"),
+        min_elo=_optional_int(data, "min_elo"),
+        max_elo=_optional_int(data, "max_elo"),
+        rated_only=_bool(data, "rated_only", False),
+        validation_fraction=_float(training, "validation_fraction", 0.15),
     )
 
 
@@ -100,6 +124,15 @@ def _int(section: Mapping[str, object], key: str, default: int) -> int:
     raise ValueError(f"Classifier config value {key} must be an integer.")
 
 
+def _optional_int(section: Mapping[str, object], key: str) -> int | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    raise ValueError(f"Classifier config value {key} must be an integer.")
+
+
 def _float(section: Mapping[str, object], key: str, default: float) -> float:
     value = section.get(key, default)
     if isinstance(value, int | float):
@@ -107,10 +140,42 @@ def _float(section: Mapping[str, object], key: str, default: float) -> float:
     raise ValueError(f"Classifier config value {key} must be a number.")
 
 
+def _str(section: Mapping[str, object], key: str, default: str) -> str:
+    value = section.get(key, default)
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"Classifier config value {key} must be a string.")
+
+
+def _optional_str(section: Mapping[str, object], key: str) -> str | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"Classifier config value {key} must be a string.")
+
+
+def _bool(section: Mapping[str, object], key: str, default: bool) -> bool:
+    value = section.get(key, default)
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"Classifier config value {key} must be a boolean.")
+
+
 def _path(section: Mapping[str, object], key: str, default: Path) -> Path:
     value = section.get(key)
     if value is None:
         return default
+    if isinstance(value, str):
+        return Path(value)
+    raise ValueError(f"Classifier config value {key} must be a path string.")
+
+
+def _optional_path(section: Mapping[str, object], key: str) -> Path | None:
+    value = section.get(key)
+    if value is None:
+        return None
     if isinstance(value, str):
         return Path(value)
     raise ValueError(f"Classifier config value {key} must be a path string.")

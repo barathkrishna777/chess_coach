@@ -1,0 +1,352 @@
+{
+  "checkpoint_path": "checkpoints/classifier/slice16-lichess-v1.pt",
+  "dataset_path": "data/processed/slice16-lichess-v1.parquet",
+  "eval_examples": 1552,
+  "eval_report_path": "docs/evals/016-lichess-classifier-v1.json",
+  "examples": 10027,
+  "label_distribution": {
+    "allowed_tactic": 372,
+    "discovered_attack": 65,
+    "endgame_slip": 0,
+    "fork": 72,
+    "hanging_piece": 275,
+    "missed_tactic": 209,
+    "opening_inaccuracy": 1534,
+    "overloaded_defender": 190,
+    "pin": 221
+  },
+  "label_order": [
+    "hanging_piece",
+    "missed_tactic",
+    "allowed_tactic",
+    "endgame_slip",
+    "opening_inaccuracy",
+    "pin",
+    "fork",
+    "overloaded_defender",
+    "discovered_attack"
+  ],
+  "metrics": {
+    "baseline": {
+      "micro": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 451
+      },
+      "per_label": {
+        "allowed_tactic": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 42
+        },
+        "discovered_attack": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 12
+        },
+        "endgame_slip": {
+          "f1": 0.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "fork": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        },
+        "hanging_piece": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 37
+        },
+        "missed_tactic": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 25
+        },
+        "opening_inaccuracy": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 249
+        },
+        "overloaded_defender": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 34
+        },
+        "pin": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        }
+      }
+    },
+    "model": {
+      "micro": {
+        "f1": 0.3664,
+        "fn": 213,
+        "fp": 610,
+        "precision": 0.2807,
+        "recall": 0.5277,
+        "tp": 238
+      },
+      "per_label": {
+        "allowed_tactic": {
+          "f1": 0.5618,
+          "fn": 17,
+          "fp": 22,
+          "precision": 0.5319,
+          "recall": 0.5952,
+          "tp": 25
+        },
+        "discovered_attack": {
+          "f1": 0.0,
+          "fn": 12,
+          "fp": 7,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "endgame_slip": {
+          "f1": 0.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "fork": {
+          "f1": 0.1282,
+          "fn": 14,
+          "fp": 54,
+          "precision": 0.0847,
+          "recall": 0.2632,
+          "tp": 5
+        },
+        "hanging_piece": {
+          "f1": 0.3371,
+          "fn": 22,
+          "fp": 37,
+          "precision": 0.2885,
+          "recall": 0.4054,
+          "tp": 15
+        },
+        "missed_tactic": {
+          "f1": 0.4762,
+          "fn": 10,
+          "fp": 23,
+          "precision": 0.3947,
+          "recall": 0.6,
+          "tp": 15
+        },
+        "opening_inaccuracy": {
+          "f1": 0.3846,
+          "fn": 109,
+          "fp": 339,
+          "precision": 0.2923,
+          "recall": 0.5622,
+          "tp": 140
+        },
+        "overloaded_defender": {
+          "f1": 0.3721,
+          "fn": 18,
+          "fp": 36,
+          "precision": 0.3077,
+          "recall": 0.4706,
+          "tp": 16
+        },
+        "pin": {
+          "f1": 0.2993,
+          "fn": 11,
+          "fp": 92,
+          "precision": 0.193,
+          "recall": 0.6667,
+          "tp": 22
+        }
+      }
+    },
+    "validation": {
+      "micro": {
+        "f1": 0.4003,
+        "fn": 163,
+        "fp": 556,
+        "precision": 0.3015,
+        "recall": 0.5955,
+        "tp": 240
+      },
+      "per_label": {
+        "allowed_tactic": {
+          "f1": 0.5517,
+          "fn": 20,
+          "fp": 19,
+          "precision": 0.5581,
+          "recall": 0.5455,
+          "tp": 24
+        },
+        "discovered_attack": {
+          "f1": 0.2222,
+          "fn": 9,
+          "fp": 5,
+          "precision": 0.2857,
+          "recall": 0.1818,
+          "tp": 2
+        },
+        "endgame_slip": {
+          "f1": 0.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "fork": {
+          "f1": 0.0882,
+          "fn": 3,
+          "fp": 59,
+          "precision": 0.0484,
+          "recall": 0.5,
+          "tp": 3
+        },
+        "hanging_piece": {
+          "f1": 0.3896,
+          "fn": 13,
+          "fp": 34,
+          "precision": 0.3061,
+          "recall": 0.5357,
+          "tp": 15
+        },
+        "missed_tactic": {
+          "f1": 0.4375,
+          "fn": 14,
+          "fp": 22,
+          "precision": 0.3889,
+          "recall": 0.5,
+          "tp": 14
+        },
+        "opening_inaccuracy": {
+          "f1": 0.4319,
+          "fn": 93,
+          "fp": 299,
+          "precision": 0.3326,
+          "recall": 0.6157,
+          "tp": 149
+        },
+        "overloaded_defender": {
+          "f1": 0.4658,
+          "fn": 5,
+          "fp": 34,
+          "precision": 0.3333,
+          "recall": 0.7727,
+          "tp": 17
+        },
+        "pin": {
+          "f1": 0.2623,
+          "fn": 6,
+          "fp": 84,
+          "precision": 0.16,
+          "recall": 0.7273,
+          "tp": 16
+        }
+      }
+    }
+  },
+  "notes": "Slice 16 trains on weak labels generated from Stockfish-gated heuristics. Baseline metrics compare heuristic weak labels against themselves; learned metrics are held out by game id and use validation-calibrated thresholds.",
+  "schema_version": "classifier-eval-report.v1",
+  "seed": 20260416,
+  "slice": "slice16-lichess-v1",
+  "source": {
+    "max_elo": 2000,
+    "min_elo": 1200,
+    "path": "data/raw/lichess/lichess_db_standard_rated_2013-01.pgn.zst",
+    "rated_only": true,
+    "sha256": "aa40b3671fa3cf1072eb182892cd90b0e1e003a4a5943492f64b77e7f3fd1635",
+    "target_examples": 10000,
+    "url": "https://database.lichess.org/standard/lichess_db_standard_rated_2013-01.pgn.zst"
+  },
+  "splits": {
+    "test_examples": 1552,
+    "test_games": 31,
+    "train_examples": 6889,
+    "train_games": 142,
+    "validation_examples": 1586,
+    "validation_games": 30
+  },
+  "status": "trained",
+  "thresholds": {
+    "calibrated": {
+      "allowed_tactic": 0.2329,
+      "discovered_attack": 0.1311,
+      "endgame_slip": 0.62,
+      "fork": 0.0227,
+      "hanging_piece": 0.1412,
+      "missed_tactic": 0.161,
+      "opening_inaccuracy": 0.1059,
+      "overloaded_defender": 0.0726,
+      "pin": 0.0273
+    },
+    "configured": {
+      "allowed_tactic": 0.62,
+      "discovered_attack": 0.62,
+      "endgame_slip": 0.62,
+      "fork": 0.62,
+      "hanging_piece": 0.62,
+      "missed_tactic": 0.62,
+      "opening_inaccuracy": 0.62,
+      "overloaded_defender": 0.62,
+      "pin": 0.62
+    }
+  },
+  "train_examples": 6889,
+  "training": {
+    "batch_size": 32,
+    "epochs": 8,
+    "learning_rate": 0.003,
+    "loss_first": [
+      0.692439,
+      0.680395,
+      0.659763,
+      0.633721,
+      0.57945
+    ],
+    "loss_last": [
+      0.059106,
+      0.094456,
+      0.080359,
+      0.118871,
+      0.110545
+    ],
+    "loss_steps": 1728,
+    "train_fraction": 0.7,
+    "validation_fraction": 0.15
+  }
+}

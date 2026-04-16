@@ -1,0 +1,41 @@
+[run]
+slice = "slice16-lichess-v1"
+seed = 20260416
+
+[data]
+source_url = "https://database.lichess.org/standard/lichess_db_standard_rated_2013-01.pgn.zst"
+raw_path = "data/raw/lichess/lichess_db_standard_rated_2013-01.pgn.zst"
+dataset_path = "data/processed/slice16-lichess-v1.parquet"
+max_games = 100000
+target_examples = 10000
+max_plies_per_game = 80
+analysis_depth = 6
+min_elo = 1200
+max_elo = 2000
+rated_only = true
+
+[model]
+checkpoint_path = "checkpoints/classifier/slice16-lichess-v1.pt"
+hidden_channels = 32
+dropout = 0.1
+
+[training]
+epochs = 8
+batch_size = 32
+learning_rate = 0.003
+train_fraction = 0.70
+validation_fraction = 0.15
+
+[eval]
+report_path = "docs/evals/016-lichess-classifier-v1.json"
+
+[thresholds]
+hanging_piece = 0.62
+missed_tactic = 0.62
+allowed_tactic = 0.62
+endgame_slip = 0.62
+opening_inaccuracy = 0.62
+pin = 0.62
+fork = 0.62
+overloaded_defender = 0.62
+discovered_attack = 0.62
