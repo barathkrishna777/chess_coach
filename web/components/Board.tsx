@@ -33,7 +33,7 @@ export default function Board({
   const initialOrientationRef = useRef(orientation);
   const initialTurnColorRef = useRef(turnColor);
   const onMoveRef = useRef<typeof onMove>(onMove);
-  const pendingLocalMoveRef = useRef(false);
+  const pendingLocalMoveRef = useRef<KeyPair | null>(null);
 
   useEffect(() => {
     onMoveRef.current = onMove;
@@ -56,7 +56,7 @@ export default function Board({
         dests: new Map(),
         events: {
           after: (from, to) => {
-            pendingLocalMoveRef.current = true;
+            pendingLocalMoveRef.current = [from, to];
             onMoveRef.current?.(from, to);
           },
         },
@@ -84,9 +84,10 @@ export default function Board({
     const nextFen = boardFen(fen);
     const currentFen = api.getFen();
     const shouldSyncFen = currentFen !== nextFen;
-    if (pendingLocalMoveRef.current && shouldSyncFen) {
+    const pendingLocalMove = pendingLocalMoveRef.current;
+    if (pendingLocalMove && shouldSyncFen) {
       api.state.animation.current = undefined;
-      if (lastMove) {
+      if (lastMove && !sameMove(lastMove, pendingLocalMove)) {
         api.move(lastMove[0], lastMove[1]);
       }
       if (api.getFen() !== nextFen) {
@@ -101,7 +102,7 @@ export default function Board({
       turnColor,
       lastMove: lastMove ? [...lastMove] : undefined,
     });
-    pendingLocalMoveRef.current = false;
+    pendingLocalMoveRef.current = null;
   }, [fen, lastMove, orientation, turnColor]);
 
   useEffect(() => {
@@ -117,7 +118,7 @@ export default function Board({
         dests: canMove ? legalDests ?? new Map() : new Map(),
         events: {
           after: (from, to) => {
-            pendingLocalMoveRef.current = true;
+            pendingLocalMoveRef.current = [from, to];
             onMoveRef.current?.(from, to);
           },
         },
@@ -144,4 +145,8 @@ function syncFenWithoutAnimation(api: Api, fen: string): void {
   const wasEnabled = api.state.animation.enabled;
   api.set({ animation: { enabled: false }, fen });
   api.set({ animation: { enabled: wasEnabled } });
+}
+
+function sameMove(left: KeyPair, right: KeyPair): boolean {
+  return left[0] === right[0] && left[1] === right[1];
 }
