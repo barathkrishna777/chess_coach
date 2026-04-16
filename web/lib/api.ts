@@ -181,7 +181,7 @@ export function userFacingErrorMessage(error: unknown): string {
       return error.message;
     }
     if (error.code === "no_due_drill") {
-      return "No due drills are available for that motif yet.";
+      return "No due drills are available for that pattern yet.";
     }
     if (error.code === "drill_not_found" || error.code === "invalid_drill_id") {
       return "That drill is no longer available. Load the next puzzle and try again.";

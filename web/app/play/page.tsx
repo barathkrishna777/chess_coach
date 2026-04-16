@@ -18,6 +18,7 @@ import {
   takebackPlayGame,
   userFacingErrorMessage,
 } from "@/lib/api";
+import { applyUciMoves } from "@/lib/chess";
 import type {
   AnnotatedGame,
   LegalMoveDestination,
@@ -62,6 +63,7 @@ export default function PlayPage() {
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
   const [hint, setHint] = useState<PlayHint | null>(null);
   const [boardResetNonce, setBoardResetNonce] = useState(0);
+  const [viewedPly, setViewedPly] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,9 +85,20 @@ export default function PlayPage() {
     };
   }, []);
 
-  const legalDests = useMemo(() => legalDestsFromState(playState), [playState]);
-  const lastMove = playState?.moves.length
-    ? lastMoveKeys(playState.moves[playState.moves.length - 1])
+  const currentPly = playState?.moves.length ?? 0;
+  const isViewingCurrentPosition = viewedPly === currentPly;
+  const viewedFens = useMemo(
+    () => applyUciMoves(START_FEN, playState?.moves.map((move) => move.uci) ?? []),
+    [playState?.moves],
+  );
+  const boardFen = viewedFens[viewedPly] ?? playState?.fen ?? START_FEN;
+  const legalDests = useMemo(
+    () => (isViewingCurrentPosition ? legalDestsFromState(playState) : new Map()),
+    [isViewingCurrentPosition, playState],
+  );
+  const viewedLastMove = viewedPly > 0 ? (playState?.moves[viewedPly - 1] ?? null) : null;
+  const lastMove = viewedLastMove
+    ? lastMoveKeys(viewedLastMove)
     : null;
   const hasUserMove =
     playState?.moves.some((move) => move.side === playState.user_color) ?? false;
@@ -94,6 +107,7 @@ export default function PlayPage() {
     Boolean(playState) &&
     playState?.status === "active" &&
     playState.legal_moves.length > 0 &&
+    isViewingCurrentPosition &&
     !isSubmittingMove &&
     !isReviewing &&
     !reviewGame;
@@ -117,6 +131,40 @@ export default function PlayPage() {
     return [{ orig: from, dest: to, brush: "green" }];
   }, [hint]);
 
+  useEffect(() => {
+    if (viewedPly > currentPly) {
+      setViewedPly(currentPly);
+    }
+  }, [currentPly, viewedPly]);
+
+  useEffect(() => {
+    if (reviewGame) return;
+
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLTextAreaElement ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      if (pendingPromotion) return;
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setViewedPly((ply) => Math.max(0, ply - 1));
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setViewedPly((ply) => Math.min(currentPly, ply + 1));
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [currentPly, pendingPromotion, reviewGame]);
+
   async function startGame() {
     setIsStarting(true);
     setError(null);
@@ -125,13 +173,13 @@ export default function PlayPage() {
     setHint(null);
     setBoardResetNonce((value) => value + 1);
     try {
-      setPlayState(
-        await startPlayGame({
-          opponent: selectedOpponent,
-          maiaRating: selectedMaiaRating,
-          userColor: selectedUserColor,
-        }),
-      );
+      const nextState = await startPlayGame({
+        opponent: selectedOpponent,
+        maiaRating: selectedMaiaRating,
+        userColor: selectedUserColor,
+      });
+      setPlayState(nextState);
+      setViewedPly(nextState.moves.length);
     } catch (caught: unknown) {
       setPlayState(null);
       setError(userFacingErrorMessage(caught));
@@ -179,6 +227,9 @@ export default function PlayPage() {
     try {
       const nextState = await submitPlayMove(playState.game_id, uci);
       setPlayState(nextState);
+      if (nextState.bot_move || nextState.status !== "active") {
+        setViewedPly(nextState.moves.length);
+      }
       if (nextState.status !== "active") {
         await reviewFinishedGame(nextState);
       }
@@ -197,7 +248,9 @@ export default function PlayPage() {
     setHint(null);
     setPendingPromotion(null);
     try {
-      setPlayState(await takebackPlayGame(playState.game_id));
+      const nextState = await takebackPlayGame(playState.game_id);
+      setPlayState(nextState);
+      setViewedPly(nextState.moves.length);
       resetBoardToServerState();
     } catch (caught: unknown) {
       setError(userFacingErrorMessage(caught));
@@ -234,6 +287,7 @@ export default function PlayPage() {
     try {
       const nextState = await resignPlayGame(playState.game_id);
       setPlayState(nextState);
+      setViewedPly(nextState.moves.length);
       await reviewFinishedGame(nextState);
     } catch (caught: unknown) {
       setError(userFacingErrorMessage(caught));
@@ -329,13 +383,13 @@ export default function PlayPage() {
             <div className="relative w-full max-w-[560px]">
               <Board
                 key={`${playState?.game_id ?? "start"}-${boardResetNonce}`}
-                fen={playState?.fen ?? START_FEN}
+                fen={boardFen}
                 orientation={playState?.orientation ?? selectedUserColor}
                 turnColor={activeUserColor}
                 movableColor={activeUserColor}
                 lastMove={lastMove}
                 legalDests={legalDests}
-                shapes={hintShapes}
+                shapes={isViewingCurrentPosition ? hintShapes : []}
                 disabled={!canMove || Boolean(pendingPromotion)}
                 onMove={(from, to) => void submitMove(from, to)}
               />
@@ -452,10 +506,25 @@ export default function PlayPage() {
                   <InfoRow
                     label="Turn"
                     value={
-                      canMove ? `${colorLabel(activeUserColor)} to move` : turnLabel(playState, isReviewing)
+                      !isViewingCurrentPosition && playState?.status === "active"
+                        ? "Use → to return to the live board"
+                        : canMove
+                          ? `${colorLabel(activeUserColor)} to move`
+                          : turnLabel(playState, isReviewing)
                     }
                   />
+                  <InfoRow
+                    label="Board"
+                    value={boardPositionLabel(playState, viewedPly, currentPly)}
+                  />
                 </dl>
+
+                {playState?.status === "active" && !isViewingCurrentPosition ? (
+                  <p className="mt-4 rounded-md bg-[#fff2bf] px-3 py-2 text-sm text-[#6f4b00]">
+                    You are looking at an earlier position. Press → until you reach the
+                    live board before making your next move.
+                  </p>
+                ) : null}
 
                 {hint ? (
                   <p
@@ -605,6 +674,21 @@ function turnLabel(state: PlayState | null, isReviewing: boolean): string {
   if (!state) return "Start when ready";
   if (state.status !== "active") return "Game over";
   return `Waiting for ${state.opponent.label}`;
+}
+
+function boardPositionLabel(
+  state: PlayState | null,
+  viewedPly: number,
+  currentPly: number,
+): string {
+  if (!state) return "Start position";
+  if (viewedPly === currentPly) return "Live position";
+  if (viewedPly === 0) return "Start position";
+  const move = state.moves[viewedPly - 1];
+  if (!move) return "Earlier position";
+  const moveNumber = Math.ceil(move.ply / 2);
+  const prefix = move.side === "white" ? `${moveNumber}.` : `${moveNumber}...`;
+  return `After ${prefix} ${move.san}`;
 }
 
 function opponentSetupLabel(status: PlayOpponentsStatus | null): string {

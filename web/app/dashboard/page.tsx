@@ -45,8 +45,8 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const maxMotifCount = useMemo(
-    () => Math.max(1, ...(profile?.motifs.map((motif) => motif.count) ?? [0])),
+  const maxPatternCount = useMemo(
+    () => Math.max(1, ...(profile?.motifs.map((pattern) => pattern.count) ?? [0])),
     [profile],
   );
   const selectedOpening = useMemo(() => {
@@ -102,7 +102,7 @@ export default function DashboardPage() {
           <>
             <SummaryGrid profile={profile} />
             <section className="grid gap-6 lg:grid-cols-[minmax(320px,1fr)_minmax(320px,0.85fr)]">
-              <MotifList motifs={profile.motifs} maxCount={maxMotifCount} />
+              <PatternList patterns={profile.motifs} maxCount={maxPatternCount} />
               <PhaseBreakdown phases={profile.phase_breakdown} />
             </section>
             <OpeningsSection
@@ -179,7 +179,7 @@ function OpeningsSection({
               <Stat label="Games" value={opening.games.toString()} />
               <Stat label="Avg loss" value={formatCentipawns(opening.avg_loss_cp)} />
               <Stat
-                label="Top motif"
+                label="Top mistake"
                 value={
                   opening.top_motif
                     ? `${opening.top_motif.label} (${opening.top_motif.count})`
@@ -218,7 +218,7 @@ function SummaryGrid({ profile }: { profile: ProfileDashboard }) {
         testId="summary-flagged"
       />
       <SummaryTile
-        label="Motifs"
+        label="Patterns"
         value={totals.motif_occurrences.toString()}
         testId="summary-motifs"
       />
@@ -250,38 +250,38 @@ function SummaryTile({
   );
 }
 
-function MotifList({
-  motifs,
+function PatternList({
+  patterns,
   maxCount,
 }: {
-  motifs: ProfileMotifAggregate[];
+  patterns: ProfileMotifAggregate[];
   maxCount: number;
 }) {
   return (
     <section className="rounded-md border border-[#d5ddd8] bg-white p-4">
-      <h2 className="text-sm font-semibold">Motif profile</h2>
-      {motifs.length > 0 ? (
+      <h2 className="text-sm font-semibold">Mistake profile</h2>
+      {patterns.length > 0 ? (
         <div className="mt-4 grid gap-3">
-          {motifs.map((motif) => (
-            <div key={motif.id} className="grid gap-2">
+          {patterns.map((pattern) => (
+            <div key={pattern.id} className="grid gap-2">
               <div className="flex items-baseline justify-between gap-3">
                 <div>
-                  <p className="font-medium">{motif.label}</p>
+                  <p className="font-medium">{pattern.label}</p>
                   <Link
-                    href={`/train?motif=${encodeURIComponent(motif.id)}`}
+                    href={`/train?motif=${encodeURIComponent(pattern.id)}`}
                     className="mt-1 inline-flex rounded-md border border-[#37786f] px-2 py-1 text-xs font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
                   >
-                    Drill this motif
+                    Drill this pattern
                   </Link>
                 </div>
                 <p className="shrink-0 text-sm text-[#4a5a54]">
-                  {motif.count} · {formatRate(motif.rate_per_100_moves)} / 100
+                  {pattern.count} · {formatRate(pattern.rate_per_100_moves)} / 100
                 </p>
               </div>
               <div className="h-3 overflow-hidden rounded-md bg-[#edf1ee]">
                 <div
                   className="h-full rounded-md bg-[#d84f45]"
-                  style={{ width: `${Math.max(6, (motif.count / maxCount) * 100)}%` }}
+                  style={{ width: `${Math.max(6, (pattern.count / maxCount) * 100)}%` }}
                 />
               </div>
             </div>
@@ -289,7 +289,7 @@ function MotifList({
         </div>
       ) : (
         <p className="mt-3 text-sm leading-6 text-[#4a5a54]">
-          No motifs have been flagged yet.
+          No mistake patterns have been flagged yet.
         </p>
       )}
     </section>
@@ -309,7 +309,7 @@ function PhaseBreakdown({ phases }: { phases: ProfilePhaseAggregate[] }) {
             <div>
               <p className="font-medium capitalize">{phase.phase}</p>
               <p className="text-sm text-[#65766f]">
-                {formatRate(phase.rate_per_100_moves)} motifs / 100 moves
+                {formatRate(phase.rate_per_100_moves)} patterns / 100 moves
               </p>
             </div>
             <p className="text-lg font-semibold">{phase.count}</p>
@@ -375,7 +375,7 @@ function EmptyState() {
       <h2 className="text-lg font-semibold">No reviewed games yet</h2>
       <p className="mt-2 max-w-2xl text-sm leading-6 text-[#4a5a54]">
         Reviewed PGNs and just-played reviews will appear here after analysis.
-        Start with one game, then come back to see which motifs are repeating.
+        Start with one game, then come back to see which mistakes are repeating.
       </p>
       <div className="mt-4 flex flex-wrap gap-3">
         <NavLink href="/">Review PGN</NavLink>

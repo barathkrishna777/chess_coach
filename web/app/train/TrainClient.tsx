@@ -137,7 +137,7 @@ export default function TrainClient() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
-                      {drill.motif_label}
+                      Pattern: {drill.motif_label}
                     </p>
                     <h2 className="mt-1 text-lg font-semibold">
                       Move {drill.move_number}

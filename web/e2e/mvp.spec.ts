@@ -12,7 +12,7 @@ const gamesApiUrl = "http://localhost:8000/api/games";
 const playApiUrl = "http://localhost:8000/api/play";
 const startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-test("uploads a sample PGN and shows deterministic review motifs", async ({ page }) => {
+test("uploads a sample PGN and shows deterministic review patterns", async ({ page }) => {
   await page.goto("/");
 
   await page.getByRole("textbox", { name: "PGN" }).fill(samplePgn);
@@ -47,7 +47,7 @@ test("dashboard loads the seeded demo profile", async ({ page }) => {
   await page.goto("/dashboard");
 
   await expect(page.getByTestId("summary-games")).toContainText("3");
-  await expect(page.getByTestId("summary-motifs")).toContainText(/Motifs[1-9][0-9]*/);
+  await expect(page.getByTestId("summary-motifs")).toContainText(/Patterns[1-9][0-9]*/);
   await expect(page.getByText("Nina (1450) vs Omar (1500)")).toBeVisible();
   await expect(page.getByText("Ada (1500) vs Turing (1520)")).toBeVisible();
   await expect(page.getByText("Priya (1300) vs Max (1350)")).toBeVisible();
@@ -78,7 +78,7 @@ test("starts a personal drill from the dashboard and reveals feedback after a mo
 }) => {
   await page.goto("/dashboard");
 
-  await page.getByRole("link", { name: "Drill this motif" }).first().click();
+  await page.getByRole("link", { name: "Drill this pattern" }).first().click();
   await expect(page).toHaveURL(/\/train\?motif=/);
   const board = page.getByTestId("training-board");
   await expect(board).toBeVisible();

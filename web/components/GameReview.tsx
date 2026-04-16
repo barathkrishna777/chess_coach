@@ -29,6 +29,12 @@ type GameReviewProps = {
 };
 
 type TryResult = "correct" | "incorrect";
+type MoveListEntry = { move: AnnotatedMove; index: number };
+type MovePair = {
+  moveNumber: number;
+  white: MoveListEntry | null;
+  black: MoveListEntry | null;
+};
 
 export default function GameReview({ game, onGameChange }: GameReviewProps) {
   const [selectedIndex, setSelectedIndex] = useState(game.moves.length > 0 ? 0 : -1);
@@ -478,6 +484,8 @@ function MoveList({
   onSelect: (index: number) => void;
   onStart: () => void;
 }) {
+  const pairs = movePairs(moves);
+
   return (
     <section className="rounded-md border border-[#d5ddd8] bg-white">
       <div className="flex items-center justify-between border-b border-[#e3e9e5] px-4 py-3">
@@ -494,32 +502,56 @@ function MoveList({
           Start
         </button>
       </div>
+      <div className="grid grid-cols-[3rem_minmax(0,1fr)_minmax(0,1fr)] gap-2 border-b border-[#e3e9e5] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[#65766f]">
+        <span>No.</span>
+        <span>White</span>
+        <span>Black</span>
+      </div>
       <div className="max-h-[420px] overflow-y-auto p-2">
-        {moves.map((move, index) => (
-          <button
-            key={`${move.ply}-${move.uci}`}
-            type="button"
-            onClick={() => onSelect(index)}
-            className={`grid w-full grid-cols-[3rem_minmax(0,1fr)_4.5rem] items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition ${
-              selectedIndex === index
-                ? "bg-[#e1f2ed] text-[#17201d]"
-                : "hover:bg-[#f0f5f2]"
-            }`}
+        {pairs.map((pair) => (
+          <div
+            key={pair.moveNumber}
+            className="grid grid-cols-[3rem_minmax(0,1fr)_minmax(0,1fr)] gap-2 rounded-md px-2 py-1"
           >
-            <span className="font-mono text-xs text-[#65766f]">
-              {move.side === "white" ? `${move.move_number}.` : `${move.move_number}...`}
-            </span>
-            <span className="min-w-0">
-              <span className="font-semibold">{move.san}</span>
-              <MotifChips motifs={move.motifs} compact />
-            </span>
-            <span className={`text-right text-xs ${lossClass(move.loss_cp)}`}>
-              {lossLabel(move.loss_cp)}
-            </span>
-          </button>
+            <span className="pt-2 font-mono text-xs text-[#65766f]">{pair.moveNumber}.</span>
+            <MoveCell move={pair.white} selectedIndex={selectedIndex} onSelect={onSelect} />
+            <MoveCell move={pair.black} selectedIndex={selectedIndex} onSelect={onSelect} />
+          </div>
         ))}
       </div>
     </section>
+  );
+}
+
+function MoveCell({
+  move,
+  selectedIndex,
+  onSelect,
+}: {
+  move: MoveListEntry | null;
+  selectedIndex: number;
+  onSelect: (index: number) => void;
+}) {
+  if (!move) return <span aria-hidden="true" />;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(move.index)}
+      className={`min-w-0 rounded-md px-2 py-2 text-left text-sm transition ${
+        selectedIndex === move.index ? "bg-[#e1f2ed] text-[#17201d]" : "hover:bg-[#f0f5f2]"
+      }`}
+    >
+      <span className="flex min-w-0 items-start justify-between gap-2">
+        <span className="min-w-0">
+          <span className="font-semibold">{move.move.san}</span>
+          <MotifChips motifs={move.move.motifs} compact />
+        </span>
+        <span className={`shrink-0 text-xs ${lossClass(move.move.loss_cp)}`}>
+          {lossLabel(move.move.loss_cp)}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -610,10 +642,10 @@ function CurrentMovePanel({
         </div>
       ) : null}
 
-      {/* Motifs */}
+      {/* Mistake types */}
       <div className="mt-4 border-t border-[#e3e9e5] pt-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
-          Motifs
+          Mistake type
         </h3>
         {move.motifs.length > 0 ? (
           <>
@@ -621,7 +653,7 @@ function CurrentMovePanel({
             <MotifEvidenceList motifs={move.motifs} />
           </>
         ) : (
-          <p className="mt-2 text-sm text-[#4a5a54]">No motif detected.</p>
+          <p className="mt-2 text-sm text-[#4a5a54]">No clear mistake type detected.</p>
         )}
       </div>
 
@@ -924,6 +956,22 @@ function MotifChips({
       ))}
     </span>
   );
+}
+
+function movePairs(moves: AnnotatedMove[]): MovePair[] {
+  const pairs = new Map<number, MovePair>();
+
+  moves.forEach((move, index) => {
+    const pair = pairs.get(move.move_number) ?? {
+      moveNumber: move.move_number,
+      white: null,
+      black: null,
+    };
+    pair[move.side] = { move, index };
+    pairs.set(move.move_number, pair);
+  });
+
+  return [...pairs.values()].sort((a, b) => a.moveNumber - b.moveNumber);
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
