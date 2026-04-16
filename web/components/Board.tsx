@@ -6,8 +6,6 @@ import type { Api } from "chessground/api";
 import type { Config } from "chessground/config";
 import type { Color, Dests, Key, KeyPair } from "chessground/types";
 
-const START_POSITION = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
-
 type BoardProps = {
   fen: string;
   lastMove?: KeyPair | null;
@@ -31,22 +29,23 @@ export default function Board({
 }: BoardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const apiRef = useRef<Api | null>(null);
-  const fenRef = useRef(fen);
+  const initialFenRef = useRef(fen);
+  const initialOrientationRef = useRef(orientation);
+  const initialTurnColorRef = useRef(turnColor);
   const onMoveRef = useRef<typeof onMove>(onMove);
 
   useEffect(() => {
-    fenRef.current = fen;
     onMoveRef.current = onMove;
-  }, [fen, onMove]);
+  }, [onMove]);
 
   useEffect(() => {
     if (!ref.current) return;
 
     const config: Config = {
-      fen: START_POSITION,
-      orientation: "white",
+      fen: boardFen(initialFenRef.current),
+      orientation: initialOrientationRef.current,
       viewOnly: false,
-      turnColor: "white",
+      turnColor: initialTurnColorRef.current,
       selectable: {
         enabled: false,
       },
@@ -56,7 +55,6 @@ export default function Board({
         dests: new Map(),
         events: {
           after: (from, to) => {
-            apiRef.current?.set({ fen: boardFen(fenRef.current) });
             onMoveRef.current?.(from, to);
           },
         },
@@ -78,12 +76,17 @@ export default function Board({
   }, []);
 
   useEffect(() => {
-    const canMove = Boolean(onMove) && !disabled;
     apiRef.current?.set({
       fen: boardFen(fen),
       orientation,
       turnColor,
       lastMove: lastMove ? [...lastMove] : undefined,
+    });
+  }, [fen, lastMove, orientation, turnColor]);
+
+  useEffect(() => {
+    const canMove = Boolean(onMove) && !disabled;
+    apiRef.current?.set({
       viewOnly: !canMove,
       selectable: {
         enabled: canMove,
@@ -94,7 +97,6 @@ export default function Board({
         dests: canMove ? legalDests ?? new Map() : new Map(),
         events: {
           after: (from, to) => {
-            apiRef.current?.set({ fen: boardFen(fenRef.current) });
             onMoveRef.current?.(from, to);
           },
         },
@@ -103,7 +105,7 @@ export default function Board({
         enabled: canMove,
       },
     });
-  }, [disabled, fen, lastMove, legalDests, movableColor, onMove, orientation, turnColor]);
+  }, [disabled, legalDests, movableColor, onMove]);
 
   return (
     <div
