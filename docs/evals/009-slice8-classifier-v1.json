@@ -1,7 +1,7 @@
 {
   "checkpoint_path": "checkpoints/classifier/slice8-v1.pt",
   "dataset_path": "data/processed/slice8-v1.parquet",
-  "eval_examples": 8,
+  "eval_examples": 7,
   "eval_report_path": "docs/evals/009-slice8-classifier-v1.json",
   "examples": 28,
   "label_order": [
@@ -19,7 +19,7 @@
         "fp": 0,
         "precision": 1.0,
         "recall": 1.0,
-        "tp": 3
+        "tp": 2
       },
       "per_label": {
         "allowed_tactic": {
@@ -55,19 +55,19 @@
           "tp": 1
         },
         "opening_inaccuracy": {
-          "f1": 1.0,
+          "f1": 0.0,
           "fn": 0,
           "fp": 0,
-          "precision": 1.0,
-          "recall": 1.0,
-          "tp": 1
+          "precision": 0.0,
+          "recall": 0.0,
+          "tp": 0
         }
       }
     },
     "model": {
       "micro": {
         "f1": 0.0,
-        "fn": 3,
+        "fn": 2,
         "fp": 0,
         "precision": 0.0,
         "recall": 0.0,
@@ -108,7 +108,7 @@
         },
         "opening_inaccuracy": {
           "f1": 0.0,
-          "fn": 1,
+          "fn": 0,
           "fp": 0,
           "precision": 0.0,
           "recall": 0.0,
@@ -122,28 +122,28 @@
   "seed": 20260416,
   "slice": "slice8-v1",
   "status": "trained",
-  "train_examples": 20,
+  "train_examples": 21,
   "training": {
     "batch_size": 16,
     "epochs": 8,
     "learning_rate": 0.003,
     "loss_history": [
-      0.67985,
-      0.671434,
-      0.646515,
-      0.624299,
-      0.58429,
-      0.52347,
-      0.428759,
-      0.391221,
-      0.294463,
-      0.333141,
-      0.313118,
-      0.576606,
-      0.290309,
-      0.395466,
-      0.302827,
-      0.222066
+      0.681532,
+      0.67019,
+      0.651159,
+      0.610071,
+      0.580826,
+      0.525962,
+      0.416304,
+      0.443626,
+      0.228015,
+      0.551553,
+      0.358052,
+      0.048404,
+      0.35863,
+      0.032147,
+      0.308692,
+      0.149406
     ],
     "train_fraction": 0.75
   }
