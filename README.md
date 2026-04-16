@@ -10,6 +10,7 @@ See [CLAUDE.md](CLAUDE.md) for project conventions and [docs/plans/001-mvp.md](d
 - [uv](https://github.com/astral-sh/uv) for Python
 - Node.js 20+
 - Stockfish: `brew install stockfish`
+- Maia play opponent: `brew install lc0`
 - Optional local explanations: [Ollama](https://ollama.com), then
   `ollama pull qwen3:8b`
 
@@ -19,7 +20,15 @@ See [CLAUDE.md](CLAUDE.md) for project conventions and [docs/plans/001-mvp.md](d
 make setup
 ```
 
-This installs Python dependencies via uv (using Python 3.11), installs npm dependencies for the web app, and leaves you ready to run.
+This installs Python dependencies via uv (using Python 3.11), installs npm
+dependencies for the web app, and downloads Maia 1100/1500/1900 weights into
+`checkpoints/maia/`. The weights are gitignored.
+
+If you only need to refresh Maia weights later:
+
+```bash
+make setup-maia
+```
 
 ## Run
 
@@ -33,6 +42,23 @@ Slice 3 explanations are generated on demand for a selected flagged move and def
 a local open-source model through Ollama at http://localhost:11434. If Ollama or the
 configured model is not running, review still works and the coach panel shows a setup
 note instead of blocking PGN analysis.
+
+## Local play opponents
+
+`/play` defaults to `auto` mode with Maia 1500. If `lc0` or the selected Maia
+weight is missing, the app falls back to the existing low-strength Stockfish
+opponent and labels that fallback in the UI.
+
+Configuration:
+
+- `CHESS_ML_LC0_PATH`: Lc0 executable path. Default finds `lc0` on `PATH`.
+- `CHESS_ML_MAIA_WEIGHTS_DIR`: Maia weights directory. Default `checkpoints/maia`.
+- `CHESS_ML_PLAY_STOCKFISH_PATH`: optional Stockfish path for fallback play.
+- `CHESS_ML_PLAY_STOCKFISH_ELO`: fallback Stockfish Elo. Default `1350`.
+
+Maia is never used for review analysis or coach-note grounding. It only chooses
+the black moves during local play; finished games still go through Stockfish for
+evaluation, motifs, and explanations.
 
 ## Local coach notes
 
@@ -71,5 +97,5 @@ Runs ruff, mypy, and pytest. Must pass before any commit.
 
 Slices 0-6 are implemented through the local profile dashboard. Current app supports
 PGN review, Stockfish analysis, heuristic motifs, lazy grounded coach notes, local play
-against low-strength Stockfish, post-game review, and `/dashboard` profile aggregation.
+against Maia with Stockfish fallback, post-game review, and `/dashboard` profile aggregation.
 See [docs/plans/001-mvp.md](docs/plans/001-mvp.md) for the updated slice map.

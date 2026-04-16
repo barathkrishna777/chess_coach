@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Dests, Key, KeyPair } from "chessground/types";
 
@@ -9,6 +9,7 @@ import GameReview from "@/components/GameReview";
 import HealthIndicator from "@/components/HealthIndicator";
 import {
   analyzePgn,
+  getPlayOpponents,
   resignPlayGame,
   startPlayGame,
   submitPlayMove,
@@ -16,7 +17,10 @@ import {
 import type {
   AnnotatedGame,
   LegalMoveGroup,
+  MaiaRating,
   PlayMove,
+  PlayOpponentRequest,
+  PlayOpponentsStatus,
   PlayState,
   PromotionChoice,
 } from "@/lib/types";
@@ -30,6 +34,29 @@ export default function PlayPage() {
   const [isSubmittingMove, setIsSubmittingMove] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [opponentStatus, setOpponentStatus] = useState<PlayOpponentsStatus | null>(null);
+  const [selectedOpponent, setSelectedOpponent] = useState<PlayOpponentRequest>("auto");
+  const [selectedMaiaRating, setSelectedMaiaRating] = useState<MaiaRating>(1500);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPlayOpponents()
+      .then((status) => {
+        if (!cancelled) {
+          setOpponentStatus(status);
+          setSelectedOpponent(status.default_requested);
+          setSelectedMaiaRating(status.default_maia_rating);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOpponentStatus(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const legalDests = useMemo(
     () => legalDestsFromState(playState),
@@ -50,7 +77,12 @@ export default function PlayPage() {
     setError(null);
     setReviewGame(null);
     try {
-      setPlayState(await startPlayGame());
+      setPlayState(
+        await startPlayGame({
+          opponent: selectedOpponent,
+          maiaRating: selectedMaiaRating,
+        }),
+      );
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -123,7 +155,7 @@ export default function PlayPage() {
               Play, then review
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#4a5a54]">
-              Play White against a low-strength local Stockfish, then go straight
+              Play White against Maia when local setup is ready, then go straight
               into Stockfish-grounded review.
             </p>
           </div>
@@ -161,6 +193,40 @@ export default function PlayPage() {
             <div className="flex flex-col gap-5">
               <section className="rounded-md border border-[#d5ddd8] bg-white p-4">
                 <div className="flex flex-wrap items-center gap-3">
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-semibold text-[#17201d]">Opponent</span>
+                    <select
+                      value={selectedOpponent}
+                      disabled={Boolean(playState?.status === "active") || isStarting}
+                      onChange={(event) =>
+                        setSelectedOpponent(event.target.value as PlayOpponentRequest)
+                      }
+                      className="rounded-md border border-[#ccd6d1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#37786f] focus:ring-2 focus:ring-[#cce8df]"
+                    >
+                      <option value="auto">Auto: Maia with fallback</option>
+                      <option value="maia">Maia only</option>
+                      <option value="stockfish">Stockfish fallback</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-semibold text-[#17201d]">Maia rating</span>
+                    <select
+                      value={selectedMaiaRating}
+                      disabled={
+                        selectedOpponent === "stockfish" ||
+                        Boolean(playState?.status === "active") ||
+                        isStarting
+                      }
+                      onChange={(event) =>
+                        setSelectedMaiaRating(Number(event.target.value) as MaiaRating)
+                      }
+                      className="rounded-md border border-[#ccd6d1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#37786f] focus:ring-2 focus:ring-[#cce8df] disabled:cursor-not-allowed disabled:bg-[#edf1ee]"
+                    >
+                      <option value={1100}>1100</option>
+                      <option value={1500}>1500</option>
+                      <option value={1900}>1900</option>
+                    </select>
+                  </label>
                   <button
                     type="button"
                     onClick={() => void startGame()}
@@ -189,13 +255,24 @@ export default function PlayPage() {
                   <InfoRow label="Status" value={statusLabel(playState)} />
                   <InfoRow
                     label="Opponent"
-                    value="Stockfish, low-strength local mode"
+                    value={playState?.opponent.label ?? opponentSetupLabel(opponentStatus)}
+                  />
+                  <InfoRow
+                    label="Setup"
+                    value={opponentSetupDetail(opponentStatus, selectedMaiaRating)}
                   />
                   <InfoRow
                     label="Turn"
                     value={canMove ? "White to move" : turnLabel(playState, isReviewing)}
                   />
                 </dl>
+
+                {playState?.opponent.fallback_reason ? (
+                  <p className="mt-4 rounded-md bg-[#fff2bf] px-3 py-2 text-sm text-[#6f4b00]">
+                    Maia was not available, so this game started with Stockfish fallback:{" "}
+                    {playState.opponent.fallback_reason}
+                  </p>
+                ) : null}
 
                 {error ? (
                   <p className="mt-4 rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]">
@@ -304,7 +381,33 @@ function turnLabel(state: PlayState | null, isReviewing: boolean): string {
   if (isReviewing) return "Preparing review";
   if (!state) return "Start when ready";
   if (state.status !== "active") return "Game over";
-  return "Waiting for Stockfish";
+  return `Waiting for ${state.opponent.label}`;
+}
+
+function opponentSetupLabel(status: PlayOpponentsStatus | null): string {
+  if (!status) return "Checking local opponents";
+  if (status.maia.lc0_available && status.maia.available_ratings.length > 0) {
+    return "Maia, with Stockfish fallback";
+  }
+  if (status.stockfish_available) return status.stockfish_label;
+  return "No local opponent ready";
+}
+
+function opponentSetupDetail(
+  status: PlayOpponentsStatus | null,
+  selectedRating: MaiaRating,
+): string {
+  if (!status) return "Loading setup status";
+  if (!status.stockfish_available && !status.maia.lc0_available) {
+    return "Install Stockfish or Lc0 to play locally";
+  }
+  if (!status.maia.lc0_available) {
+    return "Lc0 missing; auto mode will use Stockfish";
+  }
+  if (!status.maia.available_ratings.includes(selectedRating)) {
+    return `Maia ${selectedRating} weights missing; auto mode will use Stockfish`;
+  }
+  return `Maia ${selectedRating} is ready`;
 }
 
 function lastMoveKeys(move: PlayMove): KeyPair | null {

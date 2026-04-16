@@ -11,7 +11,7 @@ from typing import Literal, TypeAlias, cast
 import chess
 import chess.pgn
 
-from chess_ml.engine.opponent import OpponentMoveProvider
+from chess_ml.engine.opponent import OpponentInfo, OpponentMoveProvider
 
 PlayStatus: TypeAlias = Literal["active", "completed", "resigned"]
 GameResult: TypeAlias = Literal["1-0", "0-1", "1/2-1/2", "*"]
@@ -62,6 +62,7 @@ class PlayState:
     """Public play-state facts returned by the API."""
 
     game_id: str
+    opponent: OpponentInfo
     status: PlayStatus
     result: GameResult
     fen: str
@@ -77,6 +78,8 @@ class PlaySession:
     """A single local white-vs-bot game."""
 
     game_id: str
+    opponent: OpponentInfo
+    opponent_provider: OpponentMoveProvider
     board: chess.Board = field(default_factory=chess.Board)
     initial_fen: str | None = None
     moves: list[PlayMove] = field(default_factory=list)
@@ -88,12 +91,7 @@ class PlaySession:
         if self.initial_fen is None:
             self.initial_fen = self.board.fen()
 
-    async def apply_user_move(
-        self,
-        uci: str,
-        *,
-        opponent: OpponentMoveProvider,
-    ) -> PlayState:
+    async def apply_user_move(self, uci: str) -> PlayState:
         """Apply a white move and, if needed, a black bot reply."""
 
         async with self._lock:
@@ -112,7 +110,7 @@ class PlaySession:
             status: PlayStatus = "completed" if result != "*" else "active"
 
             if status == "active":
-                opponent_reply = await opponent.choose_move(working_board.fen())
+                opponent_reply = await self.opponent_provider.choose_move(working_board.fen())
                 bot_chess_move = _parse_legal_move(working_board, opponent_reply.uci)
                 bot_move = _play_move(working_board, bot_chess_move)
                 working_moves.append(bot_move)
@@ -140,6 +138,7 @@ class PlaySession:
 
         return PlayState(
             game_id=self.game_id,
+            opponent=self.opponent,
             status=self.status,
             result=self.result,
             fen=self.board.fen(),
@@ -162,7 +161,9 @@ class PlaySession:
         game.headers["Date"] = datetime.now(UTC).strftime("%Y.%m.%d")
         game.headers["Round"] = "-"
         game.headers["White"] = "You"
-        game.headers["Black"] = "Stockfish low skill"
+        game.headers["Black"] = self.opponent.label
+        if self.opponent.maia_rating is not None:
+            game.headers["BlackElo"] = str(self.opponent.maia_rating)
         game.headers["Result"] = self.result
 
         node: chess.pgn.GameNode = game
@@ -188,11 +189,20 @@ class InMemoryPlayStore:
     def __init__(self) -> None:
         self._sessions: dict[str, PlaySession] = {}
 
-    def create(self) -> PlaySession:
+    def create(
+        self,
+        *,
+        opponent: OpponentInfo,
+        opponent_provider: OpponentMoveProvider,
+    ) -> PlaySession:
         """Create and store a fresh standard game."""
 
         game_id = str(uuid.uuid4())
-        session = PlaySession(game_id=game_id)
+        session = PlaySession(
+            game_id=game_id,
+            opponent=opponent,
+            opponent_provider=opponent_provider,
+        )
         self._sessions[game_id] = session
         return session
 

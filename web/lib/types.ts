@@ -124,6 +124,35 @@ export type PlayMove = {
   uci: string;
 };
 
+export type PlayOpponentRequest = "auto" | "maia" | "stockfish";
+export type MaiaRating = 1100 | 1500 | 1900;
+
+export type PlayOpponent = {
+  kind: "maia" | "stockfish";
+  requested: PlayOpponentRequest;
+  label: string;
+  engine: string;
+  maia_rating: MaiaRating | null;
+  fallback_reason: string | null;
+};
+
+export type PlayOpponentsStatus = {
+  schema_version: "play-opponents.v1";
+  default_requested: PlayOpponentRequest;
+  default_maia_rating: MaiaRating;
+  stockfish_path: string;
+  stockfish_available: boolean;
+  stockfish_label: string;
+  maia: {
+    lc0_path: string | null;
+    lc0_available: boolean;
+    weights_dir: string;
+    ratings: MaiaRating[];
+    available_ratings: MaiaRating[];
+    missing_weights: MaiaRating[];
+  };
+};
+
 export type LegalMoveDestination = {
   to_square: string;
   promotions: PromotionChoice[];
@@ -139,6 +168,7 @@ export type PromotionChoice = "q" | "r" | "b" | "n";
 export type PlayState = {
   schema_version: "play-state.v1";
   game_id: string;
+  opponent: PlayOpponent;
   status: "active" | "completed" | "resigned";
   result: "1-0" | "0-1" | "1/2-1/2" | "*";
   fen: string;

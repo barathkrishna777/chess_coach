@@ -5,7 +5,10 @@ import type {
   EngineMove,
   ExplanationStatus,
   MoveExplanation,
+  MaiaRating,
   PlayState,
+  PlayOpponentRequest,
+  PlayOpponentsStatus,
   ProfileDashboard,
 } from "@/lib/types";
 
@@ -57,15 +60,34 @@ export async function getExplanationStatus(): Promise<ExplanationStatus> {
   return body as ExplanationStatus;
 }
 
-export async function startPlayGame(): Promise<PlayState> {
+export async function startPlayGame(options?: {
+  opponent: PlayOpponentRequest;
+  maiaRating: MaiaRating;
+}): Promise<PlayState> {
   const response = await fetch(`${PLAY_URL}/new`, {
     method: "POST",
+    headers: options ? { "Content-Type": "application/json" } : undefined,
+    body: options
+      ? JSON.stringify({
+          opponent: options.opponent,
+          maia_rating: options.maiaRating,
+        })
+      : undefined,
   });
   const body: unknown = await response.json();
   if (!response.ok) {
     throw new Error(errorMessage(body, response.status));
   }
   return body as PlayState;
+}
+
+export async function getPlayOpponents(): Promise<PlayOpponentsStatus> {
+  const response = await fetch(`${PLAY_URL}/opponents`);
+  const body: unknown = await response.json();
+  if (!response.ok) {
+    throw new Error(errorMessage(body, response.status));
+  }
+  return body as PlayOpponentsStatus;
 }
 
 export async function submitPlayMove(

@@ -7,11 +7,20 @@ import os
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol, TypeAlias
 
 import chess
 import chess.engine
 
+from chess_ml.engine.maia import (
+    DEFAULT_MAIA_RATING,
+    SUPPORTED_MAIA_RATINGS,
+    MaiaConfig,
+    MaiaPlayOpponent,
+    MaiaRating,
+    MaiaSetupStatus,
+    maia_setup_status,
+)
 from chess_ml.engine.stockfish import (
     DEFAULT_HASH_MB,
     DEFAULT_STOCKFISH_PATH,
@@ -24,12 +33,47 @@ DEFAULT_PLAY_ELO = 1350
 DEFAULT_PLAY_SKILL_LEVEL = 4
 DEFAULT_PLAY_TIME_MS = 250
 
+RequestedOpponent: TypeAlias = Literal["auto", "maia", "stockfish"]
+ActualOpponent: TypeAlias = Literal["maia", "stockfish"]
+
 
 class OpponentMoveProvider(Protocol):
     """A swappable source of opponent moves."""
 
     async def choose_move(self, fen: str) -> EngineMove:
         """Return a legal move for the given position."""
+
+
+@dataclass(frozen=True)
+class OpponentInfo:
+    """Public metadata for the play opponent selected for one session."""
+
+    kind: ActualOpponent
+    requested: RequestedOpponent
+    label: str
+    engine: str
+    maia_rating: MaiaRating | None
+    fallback_reason: str | None
+
+
+@dataclass(frozen=True)
+class SelectedOpponent:
+    """A selected provider plus the metadata to stamp onto the session."""
+
+    provider: OpponentMoveProvider
+    info: OpponentInfo
+
+
+@dataclass(frozen=True)
+class PlayOpponentStatus:
+    """Non-probing status for locally configured play opponents."""
+
+    default_requested: RequestedOpponent
+    default_maia_rating: MaiaRating
+    stockfish_path: str
+    stockfish_available: bool
+    stockfish_label: str
+    maia: MaiaSetupStatus
 
 
 @dataclass(frozen=True)
@@ -165,8 +209,158 @@ class StockfishPlayOpponent:
         }
 
 
+class PlayOpponentRegistry:
+    """Selects and owns local play-opponent engine processes."""
+
+    def __init__(
+        self,
+        *,
+        stockfish: StockfishPlayOpponent,
+        maia_configs: dict[MaiaRating, MaiaConfig],
+        default_requested: RequestedOpponent = "auto",
+        default_maia_rating: MaiaRating = DEFAULT_MAIA_RATING,
+    ) -> None:
+        self.stockfish = stockfish
+        self.maia_configs = maia_configs
+        self.default_requested = default_requested
+        self.default_maia_rating = default_maia_rating
+        self._maia_by_rating: dict[MaiaRating, MaiaPlayOpponent] = {}
+        self._stockfish_error: str | None = None
+
+    @classmethod
+    def from_env(cls) -> PlayOpponentRegistry:
+        """Create the local opponent registry from environment variables."""
+
+        stockfish = StockfishPlayOpponent.from_env()
+        maia_configs = {
+            rating: MaiaConfig.from_env(rating=rating) for rating in SUPPORTED_MAIA_RATINGS
+        }
+        return cls(stockfish=stockfish, maia_configs=maia_configs)
+
+    async def start_fallback(self) -> None:
+        """Start Stockfish fallback if it is available."""
+
+        try:
+            await self.stockfish.start()
+        except StockfishUnavailableError as exc:
+            self._stockfish_error = str(exc)
+        else:
+            self._stockfish_error = None
+
+    async def close(self) -> None:
+        """Stop all engine processes owned by the registry."""
+
+        await asyncio.gather(
+            *(opponent.close() for opponent in self._maia_by_rating.values()),
+            return_exceptions=True,
+        )
+        self._maia_by_rating.clear()
+        if self.stockfish.started:
+            await self.stockfish.close()
+
+    async def select(
+        self,
+        *,
+        requested: RequestedOpponent,
+        maia_rating: MaiaRating,
+    ) -> SelectedOpponent:
+        """Return the provider to use for a new play session."""
+
+        if requested == "stockfish":
+            return await self._select_stockfish(requested="stockfish", fallback_reason=None)
+
+        if requested == "maia":
+            return await self._select_maia(requested="maia", maia_rating=maia_rating)
+
+        maia_unavailable_reason = self._maia_unavailable_reason(maia_rating)
+        if maia_unavailable_reason is None:
+            try:
+                return await self._select_maia(requested="auto", maia_rating=maia_rating)
+            except StockfishUnavailableError as exc:
+                maia_unavailable_reason = str(exc)
+
+        return await self._select_stockfish(
+            requested="auto",
+            fallback_reason=maia_unavailable_reason,
+        )
+
+    def status(self) -> PlayOpponentStatus:
+        """Return local setup status without starting Maia."""
+
+        maia_status = maia_setup_status()
+        return PlayOpponentStatus(
+            default_requested=self.default_requested,
+            default_maia_rating=self.default_maia_rating,
+            stockfish_path=self.stockfish.config.path,
+            stockfish_available=os.path.exists(self.stockfish.config.path),
+            stockfish_label=_stockfish_label(self.stockfish.config),
+            maia=maia_status,
+        )
+
+    async def _select_maia(
+        self,
+        *,
+        requested: RequestedOpponent,
+        maia_rating: MaiaRating,
+    ) -> SelectedOpponent:
+        config = self.maia_configs[maia_rating]
+        opponent = self._maia_by_rating.get(maia_rating)
+        if opponent is None:
+            opponent = MaiaPlayOpponent(config)
+            self._maia_by_rating[maia_rating] = opponent
+        await opponent.start()
+        return SelectedOpponent(
+            provider=opponent,
+            info=OpponentInfo(
+                kind="maia",
+                requested=requested,
+                label=f"Maia {maia_rating}",
+                engine="Lc0 Maia",
+                maia_rating=maia_rating,
+                fallback_reason=None,
+            ),
+        )
+
+    async def _select_stockfish(
+        self,
+        *,
+        requested: RequestedOpponent,
+        fallback_reason: str | None,
+    ) -> SelectedOpponent:
+        if not self.stockfish.started:
+            await self.start_fallback()
+        if not self.stockfish.started:
+            raise StockfishUnavailableError(
+                self._stockfish_error or "Stockfish fallback opponent is unavailable."
+            )
+
+        return SelectedOpponent(
+            provider=self.stockfish,
+            info=OpponentInfo(
+                kind="stockfish",
+                requested=requested,
+                label=_stockfish_label(self.stockfish.config),
+                engine="Stockfish",
+                maia_rating=None,
+                fallback_reason=fallback_reason,
+            ),
+        )
+
+    def _maia_unavailable_reason(self, rating: MaiaRating) -> str | None:
+        config = self.maia_configs[rating]
+        if config.lc0_path is None or not os.path.exists(config.lc0_path):
+            return "Lc0 binary not found. Install it with `brew install lc0`."
+        if not config.weight_path.exists():
+            return f"Maia {rating} weights not found at {config.weight_path}."
+        return None
+
+
 def _env_int(name: str) -> int | None:
     value = os.environ.get(name)
     if value is None or not value.strip():
         return None
     return int(value)
+
+
+def _stockfish_label(config: StockfishPlayConfig) -> str:
+    return f"Stockfish fallback ({config.elo} Elo)"

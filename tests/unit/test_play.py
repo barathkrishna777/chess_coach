@@ -9,6 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from chess_ml.api.play import router as play_router
+from chess_ml.engine.maia import MaiaSetupStatus
+from chess_ml.engine.opponent import OpponentInfo, PlayOpponentStatus, SelectedOpponent
 from chess_ml.engine.stockfish import EngineMove
 from chess_ml.ingestion.pgn import parse_pgn
 from chess_ml.play.session import InMemoryPlayStore, PlaySession
@@ -25,6 +27,7 @@ def test_new_game_returns_initial_state_and_legal_moves() -> None:
     assert body["status"] == "active"
     assert body["result"] == "*"
     assert body["orientation"] == "white"
+    assert body["opponent"]["kind"] == "stockfish"
     assert body["fen"] == chess.STARTING_FEN
     assert _has_legal_destination(body["legal_moves"], "e2", "e4")
 
@@ -84,10 +87,12 @@ def test_completed_game_does_not_request_bot_move() -> None:
     opponent = _FakeOpponent()
     session = PlaySession(
         game_id="mate-fixture",
+        opponent=_stockfish_info(),
+        opponent_provider=opponent,
         board=chess.Board("7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"),
     )
 
-    state = asyncio.run(session.apply_user_move("g7f8", opponent=opponent))
+    state = asyncio.run(session.apply_user_move("g7f8"))
 
     assert state.status == "completed"
     assert state.result == "1-0"
@@ -122,6 +127,50 @@ def test_opponent_unavailable_returns_503() -> None:
     assert response.json()["error"]["code"] == "opponent_unavailable"
 
 
+def test_new_game_selects_requested_maia_from_registry() -> None:
+    app = FastAPI()
+    registry = _FakeRegistry()
+    app.state.play_store = InMemoryPlayStore()
+    app.state.play_opponents = registry
+    app.include_router(play_router)
+    client = TestClient(app)
+
+    response = client.post("/api/play/new", json={"opponent": "maia", "maia_rating": 1900})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["opponent"]["kind"] == "maia"
+    assert body["opponent"]["maia_rating"] == 1900
+    assert registry.requests == [("maia", 1900)]
+
+
+def test_play_opponents_status_returns_setup_facts() -> None:
+    app = FastAPI()
+    app.state.play_store = InMemoryPlayStore()
+    app.state.play_opponents = _FakeRegistry()
+    app.include_router(play_router)
+    client = TestClient(app)
+
+    response = client.get("/api/play/opponents")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == "play-opponents.v1"
+    assert body["default_requested"] == "auto"
+    assert body["maia"]["available_ratings"] == [1500]
+    assert body["maia"]["missing_weights"] == [1100, 1900]
+
+
+def test_resign_pgn_records_selected_opponent_headers() -> None:
+    client, _ = _client()
+    game_id = client.post("/api/play/new").json()["game_id"]
+    client.post("/api/play/move", json={"game_id": game_id, "uci": "e2e4"})
+
+    body = client.post("/api/play/resign", json={"game_id": game_id}).json()
+
+    assert '[Black "Stockfish fallback"]' in body["pgn"]
+
+
 class _FakeOpponent:
     def __init__(self) -> None:
         self.calls = 0
@@ -133,6 +182,43 @@ class _FakeOpponent:
         return EngineMove(uci=move.uci(), san=board.san(move))
 
 
+class _FakeRegistry:
+    def __init__(self) -> None:
+        self.opponent = _FakeOpponent()
+        self.requests: list[tuple[str, int]] = []
+
+    async def select(self, *, requested: str, maia_rating: int) -> SelectedOpponent:
+        self.requests.append((requested, maia_rating))
+        return SelectedOpponent(
+            provider=self.opponent,
+            info=OpponentInfo(
+                kind="maia" if requested == "maia" else "stockfish",
+                requested=requested if requested in {"auto", "maia", "stockfish"} else "auto",
+                label=f"Maia {maia_rating}" if requested == "maia" else "Stockfish fallback",
+                engine="Lc0 Maia" if requested == "maia" else "Stockfish",
+                maia_rating=maia_rating if requested == "maia" else None,
+                fallback_reason=None,
+            ),
+        )
+
+    def status(self) -> PlayOpponentStatus:
+        return PlayOpponentStatus(
+            default_requested="auto",
+            default_maia_rating=1500,
+            stockfish_path="/opt/homebrew/bin/stockfish",
+            stockfish_available=True,
+            stockfish_label="Stockfish fallback",
+            maia=MaiaSetupStatus(
+                lc0_path="/opt/homebrew/bin/lc0",
+                lc0_available=True,
+                weights_dir="checkpoints/maia",
+                ratings=(1100, 1500, 1900),
+                available_ratings=(1500,),
+                missing_weights=(1100, 1900),
+            ),
+        )
+
+
 def _client() -> tuple[TestClient, _FakeOpponent]:
     app = FastAPI()
     opponent = _FakeOpponent()
@@ -141,6 +227,17 @@ def _client() -> tuple[TestClient, _FakeOpponent]:
     app.state.play_opponent_error = ""
     app.include_router(play_router)
     return TestClient(app), opponent
+
+
+def _stockfish_info() -> OpponentInfo:
+    return OpponentInfo(
+        kind="stockfish",
+        requested="stockfish",
+        label="Stockfish fallback",
+        engine="Stockfish",
+        maia_rating=None,
+        fallback_reason=None,
+    )
 
 
 def _has_legal_destination(

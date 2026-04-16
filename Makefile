@@ -1,4 +1,4 @@
-.PHONY: help setup check lint typecheck test serve serve-api serve-web ingest train demo clean
+.PHONY: help setup setup-maia check lint typecheck test serve serve-api serve-web ingest train demo clean
 
 PYTHON := uv run python
 UVICORN := uv run uvicorn
@@ -6,6 +6,7 @@ UVICORN := uv run uvicorn
 help:
 	@echo "Targets:"
 	@echo "  setup    - install Python + npm dependencies"
+	@echo "  setup-maia - download Maia weights for local play"
 	@echo "  check    - ruff + mypy + pytest (must pass before commit)"
 	@echo "  serve    - boot API (8000) and web (3000) concurrently"
 	@echo "  ingest   - download Lichess slice and build dataset (Slice 6)"
@@ -16,6 +17,10 @@ help:
 setup:
 	uv sync
 	cd web && npm install
+	./scripts/fetch_maia_weights.sh
+
+setup-maia:
+	./scripts/fetch_maia_weights.sh
 
 check: lint typecheck test
 
