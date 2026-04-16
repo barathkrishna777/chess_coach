@@ -10,7 +10,7 @@ from typing import Any, Literal, cast
 
 import chess
 
-from chess_ml.classifier.motifs import Motif, MoveRef
+from chess_ml.classifier.motifs import Motif, MotifId, MoveRef, PieceRef
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
 from chess_ml.explanation.models import PROMPT_VERSION, ExplanationRequest
 
@@ -20,7 +20,10 @@ Use only the supplied FEN, played move, actual game line, Stockfish line, eval s
 Compare what the player did with what Stockfish recommended, then explain what changed.
 Reference concrete pieces, squares, or moves from those two supplied lines.
 Teach exactly one practical lesson; only discuss deeper positional ideas when the concrete lines do not already explain the mistake.
-Return strict JSON only: {"text":"...","referenced_move_uci":"..."}. The text must be at most 3 sentences and about 70 words or fewer."""
+Use "main line" in user-facing text; do not write "PV" or "principal variation".
+Return strict JSON only: {"text":"...","referenced_move_uci":"..."}. The text must be at most 3 sentences and about 95 words or fewer."""
+
+OUTPUT_MAX_WORDS = 95
 
 SEVERITY_RANK: Mapping[str, int] = {"blunder": 3, "mistake": 2, "inaccuracy": 1}
 MOTIF_RANK: Mapping[str, int] = {
@@ -35,6 +38,53 @@ MOTIF_RANK: Mapping[str, int] = {
     "opening_inaccuracy": 1,
 }
 TACTIC_AFTER_MOTIFS = {"allowed_tactic"}
+MOTIF_TEACHING_GUIDANCE: Mapping[MotifId, Mapping[str, object]] = {
+    "allowed_tactic": {
+        "pattern": "The played move lets the opponent use the supplied best reply.",
+        "focus": "Name that reply and teach the pre-move check for the opponent's forcing answer.",
+        "evidence_fields": ("best_move", "opponent_reply", "related_ply", "phase"),
+    },
+    "missed_tactic": {
+        "pattern": "The player missed the supplied best move before choosing the played move.",
+        "focus": "Compare the played move with the best move and teach the forcing-candidate scan.",
+        "evidence_fields": ("best_move", "phase"),
+    },
+    "endgame_slip": {
+        "pattern": "The player missed the supplied best move in a low-material position.",
+        "focus": "Emphasize exact move order and concrete calculation over general plans.",
+        "evidence_fields": ("best_move", "phase"),
+    },
+    "fork": {
+        "pattern": "One piece or move creates pressure on more than one valuable target.",
+        "focus": "Use only the listed piece and evidence, then teach scanning for multi-target moves.",
+        "evidence_fields": ("piece", "attackers", "defenders", "best_move", "phase"),
+    },
+    "pin": {
+        "pattern": "A piece is tactically restricted because moving it exposes something important.",
+        "focus": "Use the listed piece and teach checking whether a defender is pinned before relying on it.",
+        "evidence_fields": ("piece", "attackers", "defenders", "best_move", "phase"),
+    },
+    "discovered_attack": {
+        "pattern": "Moving one unit opens a line for another supplied piece or move.",
+        "focus": "Teach looking behind the moving piece for newly opened lines.",
+        "evidence_fields": ("piece", "attackers", "defenders", "best_move", "phase"),
+    },
+    "overloaded_defender": {
+        "pattern": "A defender has too many jobs and cannot meet the supplied best move.",
+        "focus": "Name the listed defender when present and teach counting defensive duties.",
+        "evidence_fields": ("piece", "attackers", "defenders", "best_move", "phase"),
+    },
+    "hanging_piece": {
+        "pattern": "The move leaves a listed piece inadequately protected.",
+        "focus": "Use the listed attackers and defenders to teach the attack-defender count.",
+        "evidence_fields": ("piece", "attackers", "defenders", "best_move", "phase"),
+    },
+    "opening_inaccuracy": {
+        "pattern": "The move loses modest value early compared with the supplied best move.",
+        "focus": "Frame the best move as a concrete opening improvement, not broad opening theory.",
+        "evidence_fields": ("best_move", "phase"),
+    },
+}
 
 
 class InvalidExplanationResponseError(ValueError):
@@ -102,12 +152,15 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
         },
         "motifs": [_motif_payload(motif) for motif in request.motifs],
         "primary_motif_id": primary.id,
+        "teaching_guidance": _teaching_guidance_payload(primary.id),
         "game_phase": primary.evidence.phase,
         "output_contract": {
             "format": "strict JSON",
             "schema": {"text": "string", "referenced_move_uci": "string|null"},
             "max_sentences": 3,
-            "max_words": 70,
+            "max_words": OUTPUT_MAX_WORDS,
+            "user_facing_line_name": "main line",
+            "disallowed_user_facing_terms": ("PV", "principal variation"),
             "required_content": (
                 "Compare the played move or actual line with Stockfish's best move or main line."
             ),
@@ -118,7 +171,8 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
         "Your job is comparison, not discovery: contrast move.san and actual_line with "
         "engine.ground_truth_best_move and engine.ground_truth_pv.\n"
         "Do not mention any move as best unless it is the ground_truth_best_move or in "
-        "ground_truth_pv.\n\n"
+        "ground_truth_pv. The field name ground_truth_pv is internal; in the explanation "
+        'text, call it the "main line" and do not write "PV" or "principal variation".\n\n'
         f"{json.dumps(facts, sort_keys=True, separators=(',', ':'))}"
     )
     return BuiltPrompt(
@@ -181,12 +235,14 @@ def validate_provider_response(raw_text: str, prompt: BuiltPrompt) -> ValidatedE
         raise InvalidExplanationResponseError("Explanation text must be a non-empty string.")
     if referenced_move is not None and not isinstance(referenced_move, str):
         raise InvalidExplanationResponseError("referenced_move_uci must be a string or null.")
+    if _uses_disallowed_line_term(text):
+        raise InvalidExplanationResponseError("Explanation used internal engine line wording.")
     if not _references_engine_line(text, referenced_move, prompt):
         raise InvalidExplanationResponseError("Explanation referenced a non-engine move.")
     if _claims_different_engine_move(text, prompt):
         raise InvalidExplanationResponseError("Explanation claimed a different engine move.")
     text = _trim_to_sentence_limit(text, max_sentences=3)
-    text = _trim_to_word_limit(text, max_words=80)
+    text = _trim_to_word_limit(text, max_words=OUTPUT_MAX_WORDS)
 
     return ValidatedExplanation(text=text.strip(), response_json=parsed)
 
@@ -266,6 +322,16 @@ def _move_ref_payload(move: MoveRef | None) -> dict[str, str] | None:
     return {"uci": move.uci, "san": move.san}
 
 
+def _teaching_guidance_payload(motif_id: MotifId) -> dict[str, object]:
+    guidance = MOTIF_TEACHING_GUIDANCE[motif_id]
+    return {
+        "motif_id": motif_id,
+        "pattern": guidance["pattern"],
+        "focus": guidance["focus"],
+        "evidence_fields": list(cast(tuple[str, ...], guidance["evidence_fields"])),
+    }
+
+
 def _sentence_count(text: str) -> int:
     fragments = [fragment for fragment in re.split(r"[.!?]+", text) if fragment.strip()]
     return len(fragments)
@@ -323,6 +389,17 @@ def _claims_different_engine_move(text: str, prompt: BuiltPrompt) -> bool:
         if _text_contains_any_ref(sentence, disallowed_refs):
             return True
     return False
+
+
+def _uses_disallowed_line_term(text: str) -> bool:
+    return (
+        re.search(
+            r"(?<![A-Za-z0-9])(?:p\s*\.?\s*v\.?|principal variation)(?![A-Za-z0-9])",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def _engine_line_refs(prompt: BuiltPrompt) -> set[str]:
@@ -404,17 +481,18 @@ def _fallback_intro(
     move_label = f"{request.san} ({request.uci})"
     motif_label = motif.label.lower()
     phase = _phase_label(motif.evidence.phase)
-    article = _article_for(phase)
+    context_label = motif_label if motif_label.startswith(f"{phase} ") else f"{phase} {motif_label}"
+    article = _article_for(context_label)
     if best_label is None:
-        return f"{move_label} is tagged as {article} {phase} {motif_label}."
+        return f"{move_label} is tagged as {article} {context_label}."
     if line_source == "after":
         return (
             f"After {move_label}, Stockfish says the key reply is {best_label}, "
-            f"so this is {article} {phase} {motif_label}."
+            f"so this is {article} {context_label}."
         )
     return (
         f"Instead of {move_label}, Stockfish wanted {best_label}, "
-        f"which is why this is tagged as {article} {phase} {motif_label}."
+        f"which is why this is tagged as {article} {context_label}."
     )
 
 
@@ -432,37 +510,89 @@ def _fallback_proof_sentence(pv_label: str, loss_cp: int | None) -> str | None:
 def _fallback_lesson(motif: Motif) -> str:
     evidence = motif.evidence
     if motif.id == "allowed_tactic":
-        reply = (
-            f" like {evidence.opponent_reply.san} ({evidence.opponent_reply.uci})"
-            if evidence.opponent_reply is not None
-            else ""
-        )
-        return f"Lesson: before making the move, check the opponent's best reply{reply}."
+        reply = _move_ref_label(evidence.opponent_reply) or _move_ref_label(evidence.best_move)
+        if reply and evidence.related_ply is not None:
+            return (
+                "Lesson: before making the move, check whether the opponent's best reply "
+                f"{reply} is already available on ply {evidence.related_ply}."
+            )
+        if reply:
+            return f"Lesson: before making the move, check the opponent's best reply {reply}."
+        return "Lesson: before making the move, check the opponent's best reply."
     if motif.id in {"missed_tactic", "endgame_slip"}:
+        phase = _phase_label(evidence.phase)
         if evidence.best_move is not None:
-            best = f"{evidence.best_move.san} ({evidence.best_move.uci})"
-            return f"Lesson: compare your candidate with Stockfish's concrete move {best}."
-        return "Lesson: compare your candidate with the concrete Stockfish line."
+            best = _move_ref_label(evidence.best_move)
+            return (
+                f"Lesson: in the {phase}, compare your candidate with Stockfish's "
+                f"concrete move {best}."
+            )
+        return f"Lesson: in the {phase}, compare your candidate with the concrete main line."
     if motif.id == "hanging_piece" and evidence.piece is not None:
-        piece = evidence.piece
-        return f"Lesson: count attacks and defenders on the {piece.role} on {piece.square}."
+        piece = _piece_ref_label(evidence.piece)
+        attackers = _evidence_list_label("attackers", evidence.attackers)
+        defenders = _evidence_list_label("defenders", evidence.defenders)
+        counts = _join_evidence_phrases(attackers, defenders)
+        if counts:
+            return f"Lesson: count {counts} before leaving the {piece} loose."
+        return f"Lesson: count attacks and defenders before leaving the {piece} loose."
     if motif.id == "pin" and evidence.piece is not None:
-        piece = evidence.piece
-        return f"Lesson: before moving, check whether the {piece.role} on {piece.square} is pinned."
+        piece = _piece_ref_label(evidence.piece)
+        attackers = _evidence_list_label("attackers", evidence.attackers)
+        if attackers:
+            return (
+                f"Lesson: before relying on the {piece}, check the pin pressure from {attackers}."
+            )
+        return f"Lesson: before relying on the {piece}, check whether it is pinned."
     if motif.id == "fork" and evidence.piece is not None:
-        piece = evidence.piece
-        return f"Lesson: look for one {piece.role} attacking two valuable targets."
+        piece = _piece_ref_label(evidence.piece)
+        attackers = _evidence_list_label("listed pressure", evidence.attackers)
+        if attackers:
+            return f"Lesson: use the {piece} cue and scan for one move hitting multiple targets."
+        return f"Lesson: use the {piece} cue and scan for one move hitting two targets."
     if motif.id == "overloaded_defender" and evidence.piece is not None:
-        piece = evidence.piece
-        return (
-            f"Lesson: notice when the {piece.role} on {piece.square} has too many defensive jobs."
-        )
+        piece = _piece_ref_label(evidence.piece)
+        defenders = _evidence_list_label("defensive jobs", evidence.defenders)
+        if defenders:
+            return f"Lesson: notice when the {piece} cannot cover all {defenders}."
+        return f"Lesson: notice when the {piece} has too many defensive jobs."
     if motif.id == "discovered_attack" and evidence.piece is not None:
-        piece = evidence.piece
-        return f"Lesson: check whether moving a blocker opens the {piece.role} on {piece.square}."
+        piece = _piece_ref_label(evidence.piece)
+        attackers = _evidence_list_label("opened lines", evidence.attackers)
+        if attackers:
+            return f"Lesson: before the move, check whether it opens the {piece} with {attackers}."
+        return f"Lesson: before the move, check whether it opens the {piece}."
     if motif.id == "opening_inaccuracy":
-        return "Lesson: save this engine line as the concrete opening improvement to review."
-    return "Lesson: use the Stockfish line as the concrete correction for this position."
+        best = _move_ref_label(evidence.best_move)
+        if best:
+            return f"Lesson: save {best} as the concrete opening improvement to review."
+        return "Lesson: save this main line as the concrete opening improvement to review."
+    return "Lesson: use the Stockfish main line as the concrete correction for this position."
+
+
+def _move_ref_label(move: MoveRef | None) -> str | None:
+    if move is None:
+        return None
+    return f"{move.san} ({move.uci})"
+
+
+def _piece_ref_label(piece: PieceRef) -> str:
+    return f"{piece.role} on {piece.square}"
+
+
+def _evidence_list_label(label: str, values: tuple[str, ...]) -> str | None:
+    if not values:
+        return None
+    return f"{label} {', '.join(values[:3])}"
+
+
+def _join_evidence_phrases(*phrases: str | None) -> str | None:
+    available = [phrase for phrase in phrases if phrase is not None]
+    if not available:
+        return None
+    if len(available) == 1:
+        return available[0]
+    return " and ".join(available)
 
 
 def _phase_label(phase: str) -> str:

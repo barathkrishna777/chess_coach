@@ -16,7 +16,15 @@ from fastapi.testclient import TestClient
 from chess_ml.api.games import _annotate_move
 from chess_ml.api.games import router as games_router
 from chess_ml.classifier.classify import classify_moves
-from chess_ml.classifier.motifs import AnalyzedMove
+from chess_ml.classifier.config import LABEL_ORDER
+from chess_ml.classifier.motifs import (
+    AnalyzedMove,
+    Motif,
+    MotifEvidence,
+    MotifId,
+    MoveRef,
+    PieceRef,
+)
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
 from chess_ml.explanation.cache import ExplanationCache, cache_key_for_facts
 from chess_ml.explanation.client import (
@@ -100,16 +108,38 @@ def test_prompt_uses_after_line_for_allowed_tactic() -> None:
     assert prompt.facts["engine"]["ground_truth_best_move"] == {"uci": "c3d5", "san": "Nxd5"}
 
 
+@pytest.mark.parametrize("motif_id", LABEL_ORDER)
+def test_prompt_includes_motif_specific_teaching_guidance(motif_id: MotifId) -> None:
+    prompt = build_prompt(_request_with_motif(motif_id))
+    guidance = prompt.facts["teaching_guidance"]
+    output_contract = prompt.facts["output_contract"]
+
+    assert guidance["motif_id"] == motif_id
+    assert isinstance(guidance["pattern"], str)
+    assert guidance["pattern"]
+    assert isinstance(guidance["focus"], str)
+    assert guidance["focus"]
+    assert isinstance(guidance["evidence_fields"], list)
+    assert guidance["evidence_fields"]
+    assert output_contract["max_words"] == 95
+    assert output_contract["user_facing_line_name"] == "main line"
+    assert "PV" in output_contract["disallowed_user_facing_terms"]
+
+
 def test_system_prompt_contains_grounding_rules_without_image_language() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
     assert "Stockfish is ground truth" in SYSTEM_PROMPT
     assert "never contradict" in SYSTEM_PROMPT
     assert "Compare what the player did with what Stockfish recommended" in SYSTEM_PROMPT
     assert "strict JSON" in SYSTEM_PROMPT
     assert "at most 3 sentences" in SYSTEM_PROMPT
-    lowered = SYSTEM_PROMPT.lower()
+    assert "about 95 words" in SYSTEM_PROMPT
+    lowered = f"{SYSTEM_PROMPT}\n{prompt.user_prompt}".lower()
     assert "image" not in lowered
     assert "ocr" not in lowered
     assert "screenshot" not in lowered
+    assert "computer vision" not in lowered
 
 
 def test_cache_key_is_deterministic_and_tracks_engine_line() -> None:
@@ -123,6 +153,11 @@ def test_cache_key_is_deterministic_and_tracks_engine_line() -> None:
     changed_facts["engine"]["ground_truth_pv"] = [{"uci": "g1f3", "san": "Nf3"}]
 
     assert cache_key_for_facts(facts) != cache_key_for_facts(changed_facts)
+
+    changed_guidance = copy.deepcopy(facts)
+    changed_guidance["teaching_guidance"]["focus"] = "Different teaching focus."
+
+    assert cache_key_for_facts(facts) != cache_key_for_facts(changed_guidance)
 
 
 def test_validation_accepts_wrapped_json_and_san_reference() -> None:
@@ -174,6 +209,16 @@ def test_validation_rejects_generic_advice_without_engine_line() -> None:
     with pytest.raises(InvalidExplanationResponseError):
         validate_provider_response(
             '{"text":"You should look for forcing moves before playing quiet development.","referenced_move_uci":"c3d5"}',
+            prompt,
+        )
+
+
+def test_validation_rejects_user_facing_pv_wording() -> None:
+    prompt = build_prompt(_missed_tactic_request())
+
+    with pytest.raises(InvalidExplanationResponseError):
+        validate_provider_response(
+            '{"text":"Stockfish wanted Nxd5 from c3 in the PV. Check forcing captures first.","referenced_move_uci":"c3d5"}',
             prompt,
         )
 
@@ -324,8 +369,40 @@ def test_allowed_tactic_fallback_explains_the_actionable_check() -> None:
     assert text.startswith("After a6 (a7a6), Stockfish says the key reply is Nxd5 (c3d5)")
     assert "an opening allowed tactic" in text
     assert "recorded loss is 6.22 pawns" in text
-    assert "Lesson: before making the move, check the opponent's best reply" in text
+    assert "opponent's best reply Nxd5 (c3d5)" in text
+    assert "ply 7" in text
     assert "Grounding:" not in text
+
+
+@pytest.mark.parametrize(
+    ("motif_id", "expected_fragments"),
+    [
+        ("allowed_tactic", ("allowed tactic", "e5 (e7e5)", "ply 2")),
+        ("endgame_slip", ("endgame slip", "in the endgame", "e4 (e2e4)")),
+        ("pin", ("pin", "knight on f3", "attackers black bishop on g4")),
+        ("fork", ("fork", "knight on f3", "multiple targets")),
+        ("overloaded_defender", ("overloaded defender", "knight on f3", "defensive jobs")),
+        ("discovered_attack", ("discovered attack", "knight on f3", "opened lines")),
+        ("hanging_piece", ("hanging piece", "attackers black bishop on g4", "defenders")),
+        ("missed_tactic", ("missed tactic", "in the middlegame", "e4 (e2e4)")),
+        ("opening_inaccuracy", ("opening inaccuracy", "opening improvement", "e4 (e2e4)")),
+    ],
+)
+def test_fallback_explanation_teaches_each_motif(
+    motif_id: MotifId,
+    expected_fragments: tuple[str, ...],
+) -> None:
+    request = _request_with_motif(motif_id)
+    prompt = build_prompt(request)
+
+    text = build_fallback_explanation(request, prompt)
+
+    assert "Lesson:" in text
+    assert "main line" in text
+    assert "PV" not in text
+    assert "principal variation" not in text.lower()
+    for fragment in expected_fragments:
+        assert fragment in text
 
 
 def test_explanation_status_endpoint_does_not_contact_provider(tmp_path: Path) -> None:
@@ -414,6 +491,66 @@ def _missed_tactic_request() -> ExplanationRequest:
         {
             7: _spec(before_cp=740, after_cp=85, best_before="c3d5"),
         },
+    )
+
+
+def _request_with_motif(motif_id: MotifId) -> ExplanationRequest:
+    parsed = parse_pgn(
+        """
+[Event "Fixture"]
+[Result "*"]
+
+1. d4 *
+"""
+    )
+    move = parsed.moves[0]
+    before = _evaluation(move.fen_before, 0, best_uci="e2e4")
+    after = _evaluation(move.fen_after, -320, best_uci="e7e5")
+    return ExplanationRequest(
+        ply=move.ply,
+        move_number=move.move_number,
+        side=move.side,
+        san=move.san,
+        uci=move.uci,
+        fen_before=move.fen_before,
+        fen_after=move.fen_after,
+        analysis_before=before,
+        analysis_after=after,
+        loss_cp=320,
+        actual_line=_actual_line(parsed, move.ply),
+        motifs=(_motif(motif_id),),
+    )
+
+
+def _motif(motif_id: MotifId) -> Motif:
+    phase = "endgame" if motif_id == "endgame_slip" else "opening"
+    if motif_id in {"missed_tactic", "pin", "fork", "overloaded_defender", "discovered_attack"}:
+        phase = "middlegame"
+    best_move = (
+        MoveRef(uci="e7e5", san="e5")
+        if motif_id == "allowed_tactic"
+        else MoveRef(
+            uci="e2e4",
+            san="e4",
+        )
+    )
+    return Motif(
+        id=motif_id,
+        label=motif_id.replace("_", " ").title(),
+        severity="inaccuracy" if motif_id == "opening_inaccuracy" else "mistake",
+        source="heuristic",
+        score_cp=320,
+        evidence=MotifEvidence(
+            threshold_cp=200,
+            score_kind="cp",
+            phase=phase,
+            piece=PieceRef(color="white", role="knight", square="f3"),
+            attackers=("black bishop on g4", "black queen on d6"),
+            defenders=("white queen on d1",),
+            best_move=best_move,
+            opponent_reply=MoveRef(uci="e7e5", san="e5") if motif_id == "allowed_tactic" else None,
+            related_ply=2 if motif_id == "allowed_tactic" else None,
+        ),
     )
 
 
