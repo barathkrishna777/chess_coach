@@ -33,6 +33,7 @@ export default function Board({
   const initialOrientationRef = useRef(orientation);
   const initialTurnColorRef = useRef(turnColor);
   const onMoveRef = useRef<typeof onMove>(onMove);
+  const pendingLocalMoveRef = useRef(false);
 
   useEffect(() => {
     onMoveRef.current = onMove;
@@ -55,6 +56,7 @@ export default function Board({
         dests: new Map(),
         events: {
           after: (from, to) => {
+            pendingLocalMoveRef.current = true;
             onMoveRef.current?.(from, to);
           },
         },
@@ -76,12 +78,23 @@ export default function Board({
   }, []);
 
   useEffect(() => {
-    apiRef.current?.set({
-      fen: boardFen(fen),
+    const api = apiRef.current;
+    if (!api) return;
+
+    const nextFen = boardFen(fen);
+    const currentFen = api.getFen();
+    const shouldSyncFen = currentFen !== nextFen;
+    if (pendingLocalMoveRef.current && shouldSyncFen) {
+      api.state.animation.current = undefined;
+    }
+
+    api.set({
+      ...(shouldSyncFen ? { fen: nextFen } : {}),
       orientation,
       turnColor,
       lastMove: lastMove ? [...lastMove] : undefined,
     });
+    pendingLocalMoveRef.current = false;
   }, [fen, lastMove, orientation, turnColor]);
 
   useEffect(() => {
@@ -97,6 +110,7 @@ export default function Board({
         dests: canMove ? legalDests ?? new Map() : new Map(),
         events: {
           after: (from, to) => {
+            pendingLocalMoveRef.current = true;
             onMoveRef.current?.(from, to);
           },
         },
