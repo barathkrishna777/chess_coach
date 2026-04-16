@@ -244,7 +244,7 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
           </div>
         </div>
 
-        {/* PV navigation bar */}
+      {/* Main line navigation bar */}
         {pvMode && pvData ? (
           <div className="flex items-center gap-2 rounded-md border border-[#c2d8d0] bg-[#edf4f1] px-3 py-2">
             <button
@@ -257,7 +257,7 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
               ←
             </button>
             <span className="flex-1 text-center text-xs text-[#4a5a54]">
-              Best line — step {pvStep ?? 0} of {pvData.fens.length - 1}
+              Main line — step {pvStep ?? 0} of {pvData.fens.length - 1}
             </span>
             <button
               type="button"
@@ -567,7 +567,7 @@ function CurrentMovePanel({
           value={move.analysis_before.best_move?.san ?? "Game over"}
         />
         <InfoRow
-          label="Line"
+          label="Main line"
           value={move.analysis_before.pv.map((pvMove) => pvMove.san).join(" ") || "None"}
         />
       </dl>
@@ -581,7 +581,7 @@ function CurrentMovePanel({
               onClick={onShowBestLine}
               className="rounded-md border border-[#37786f] px-3 py-1.5 text-xs font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
             >
-              Show best line
+              Show main line
             </button>
           ) : null}
           {hasBestMove ? (

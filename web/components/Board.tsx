@@ -37,6 +37,7 @@ export default function Board({
   const onMoveRef = useRef<typeof onMove>(onMove);
   const pendingLocalMoveRef = useRef<KeyPair | null>(null);
   const initialAnimationEnabledRef = useRef(!onMove);
+  const hasMoveHandler = Boolean(onMove);
 
   useEffect(() => {
     onMoveRef.current = onMove;
@@ -112,10 +113,10 @@ export default function Board({
   }, [fen, lastMove, orientation, turnColor]);
 
   useEffect(() => {
-    const canMove = Boolean(onMove) && !disabled;
+    const canMove = hasMoveHandler && !disabled;
     apiRef.current?.set({
       animation: {
-        enabled: !onMove,
+        enabled: !hasMoveHandler,
       },
       viewOnly: !canMove,
       selectable: {
@@ -136,7 +137,7 @@ export default function Board({
         enabled: canMove,
       },
     });
-  }, [disabled, legalDests, movableColor, onMove]);
+  }, [disabled, hasMoveHandler, legalDests, movableColor]);
 
   return (
     <div

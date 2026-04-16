@@ -18,6 +18,7 @@ from chess_ml import __version__
 from chess_ml.api.games import router as games_router
 from chess_ml.api.play import router as play_router
 from chess_ml.api.profile import router as profile_router
+from chess_ml.api.train import router as train_router
 from chess_ml.engine.opponent import PlayOpponentRegistry
 from chess_ml.engine.stockfish import StockfishPool, StockfishUnavailableError
 from chess_ml.explanation.service import service_from_env
@@ -89,3 +90,4 @@ def health() -> HealthResponse:
 app.include_router(games_router)
 app.include_router(play_router)
 app.include_router(profile_router)
+app.include_router(train_router)

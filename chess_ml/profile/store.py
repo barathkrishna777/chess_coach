@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
 
@@ -50,6 +51,13 @@ class ProfileMotifOccurrence:
     phase: GamePhase
     loss_cp: int | None
     score_cp: int | None
+    fen_before: str | None = None
+    best_move_uci: str | None = None
+    best_move_san: str | None = None
+    pv_json: str | None = None
+    explanation_text: str | None = None
+    explanation_status: str | None = None
+    evidence_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +124,89 @@ class ProfileDashboard:
     motifs: tuple[MotifAggregate, ...]
     phase_breakdown: tuple[PhaseAggregate, ...]
     recent_games: tuple[RecentProfileGame, ...]
+
+
+@dataclass(frozen=True)
+class DrillMove:
+    """A move reference revealed after a drill attempt."""
+
+    uci: str
+    san: str
+
+
+@dataclass(frozen=True)
+class DrillContext:
+    """Stored review context for one personal drill."""
+
+    motif_label: str
+    phase: GamePhase
+    loss_cp: int | None
+    score_cp: int | None
+    played_move: DrillMove
+    pv: tuple[DrillMove, ...]
+    explanation_text: str | None
+    explanation_status: str | None
+    evidence: dict[str, object] | None
+
+
+@dataclass(frozen=True)
+class DrillPosition:
+    """One trainable position from the user's reviewed games."""
+
+    game_id: str
+    ply: int
+    move_number: int
+    side: Side
+    motif: str
+    motif_label: str
+    fen: str
+    hint_text: str
+    context: DrillContext
+
+
+@dataclass(frozen=True)
+class DrillResult:
+    """A recorded drill attempt plus the gated answer."""
+
+    correct: bool
+    attempted_uci: str
+    best_move: DrillMove
+    next_due_at: str
+    context: DrillContext
+
+
+@dataclass(frozen=True)
+class DrillTotals:
+    """Top-line drill progress summary."""
+
+    trainable_positions: int
+    due_positions: int
+    attempts: int
+    correct_attempts: int
+
+
+@dataclass(frozen=True)
+class DrillMotifStats:
+    """Drill progress summary for one motif."""
+
+    motif: str
+    motif_label: str
+    trainable_positions: int
+    due_positions: int
+    attempts: int
+    correct_attempts: int
+
+
+@dataclass(frozen=True)
+class DrillStats:
+    """Aggregated drill progress payload."""
+
+    totals: DrillTotals
+    motifs: tuple[DrillMotifStats, ...]
+
+
+class DrillNotFoundError(LookupError):
+    """Raised when a submitted drill id no longer maps to a trainable row."""
 
 
 class ProfileStore:
@@ -194,9 +285,16 @@ class ProfileStore:
                     severity,
                     phase,
                     loss_cp,
-                    score_cp
+                    score_cp,
+                    fen_before,
+                    best_move_uci,
+                    best_move_san,
+                    pv_json,
+                    explanation_text,
+                    explanation_status,
+                    evidence_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -212,11 +310,291 @@ class ProfileStore:
                         occurrence.phase,
                         occurrence.loss_cp,
                         occurrence.score_cp,
+                        occurrence.fen_before,
+                        occurrence.best_move_uci,
+                        occurrence.best_move_san,
+                        occurrence.pv_json,
+                        occurrence.explanation_text,
+                        occurrence.explanation_status,
+                        occurrence.evidence_json,
                     )
                     for occurrence in review.motif_occurrences
                 ],
             )
             connection.commit()
+
+    def next_drill(
+        self,
+        motif: str | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> DrillPosition | None:
+        """Return the next due personal drill position, if one exists."""
+
+        timestamp = _timestamp(now)
+        motif_filter = _motif_filter(motif)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                WITH latest_attempt_ids AS (
+                    SELECT MAX(id) AS id
+                    FROM drill_attempts
+                    GROUP BY game_id, ply, motif
+                ),
+                attempt_state AS (
+                    SELECT attempts.game_id, attempts.ply, attempts.motif, attempts.next_due_at
+                    FROM drill_attempts AS attempts
+                    INNER JOIN latest_attempt_ids AS latest
+                        ON attempts.id = latest.id
+                )
+                SELECT
+                    occurrences.*,
+                    games.created_at AS game_created_at,
+                    games.updated_at AS game_updated_at,
+                    attempt_state.next_due_at AS latest_due_at
+                FROM profile_motif_occurrences AS occurrences
+                INNER JOIN profile_games AS games
+                    ON occurrences.game_id = games.game_id
+                LEFT JOIN attempt_state
+                    ON occurrences.game_id = attempt_state.game_id
+                    AND occurrences.ply = attempt_state.ply
+                    AND occurrences.motif_id = attempt_state.motif
+                WHERE occurrences.fen_before IS NOT NULL
+                    AND occurrences.best_move_uci IS NOT NULL
+                    AND (? IS NULL OR occurrences.motif_id = ?)
+                    AND (
+                        attempt_state.next_due_at IS NULL
+                        OR attempt_state.next_due_at <= ?
+                    )
+                ORDER BY
+                    CASE WHEN attempt_state.next_due_at IS NULL THEN 0 ELSE 1 END,
+                    COALESCE(attempt_state.next_due_at, ''),
+                    games.updated_at ASC,
+                    games.created_at ASC,
+                    occurrences.game_id ASC,
+                    occurrences.ply ASC,
+                    occurrences.motif_id ASC
+                LIMIT 1
+                """,
+                (motif_filter, motif_filter, timestamp),
+            ).fetchone()
+
+        if row is None:
+            return None
+        return _drill_position(row)
+
+    def record_drill_attempt(
+        self,
+        *,
+        game_id: str,
+        ply: int,
+        motif: str,
+        attempted_uci: str,
+        now: datetime | None = None,
+    ) -> DrillResult:
+        """Persist one drill attempt and return the gated answer/context."""
+
+        timestamp = _timestamp(now)
+        attempted_at = _datetime_from_timestamp(timestamp)
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            row = connection.execute(
+                """
+                SELECT *
+                FROM profile_motif_occurrences
+                WHERE game_id = ?
+                    AND ply = ?
+                    AND motif_id = ?
+                    AND fen_before IS NOT NULL
+                    AND best_move_uci IS NOT NULL
+                LIMIT 1
+                """,
+                (game_id, ply, motif),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise DrillNotFoundError("That drill is no longer available.")
+
+            best_move_uci = str(row["best_move_uci"])
+            correct = attempted_uci == best_move_uci
+            next_due_at = _next_due_at(
+                attempted_at,
+                correct=correct,
+                prior_correct_streak=_prior_correct_streak(connection, game_id, ply, motif),
+            )
+            connection.execute(
+                """
+                INSERT INTO drill_attempts (
+                    game_id,
+                    ply,
+                    motif,
+                    attempted_uci,
+                    correct,
+                    attempted_at,
+                    next_due_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    game_id,
+                    ply,
+                    motif,
+                    attempted_uci,
+                    1 if correct else 0,
+                    timestamp,
+                    next_due_at,
+                ),
+            )
+            connection.commit()
+
+        context = _drill_context(row)
+        return DrillResult(
+            correct=correct,
+            attempted_uci=attempted_uci,
+            best_move=DrillMove(
+                uci=best_move_uci,
+                san=_optional_str(row["best_move_san"]) or best_move_uci,
+            ),
+            next_due_at=next_due_at,
+            context=context,
+        )
+
+    def drill_stats(self, *, now: datetime | None = None) -> DrillStats:
+        """Return persisted drill progress summary."""
+
+        timestamp = _timestamp(now)
+        with self._connect() as connection:
+            trainable_positions = _int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM profile_motif_occurrences
+                    WHERE fen_before IS NOT NULL
+                        AND best_move_uci IS NOT NULL
+                    """
+                ).fetchone()["count"]
+            )
+            due_positions = _int(
+                connection.execute(
+                    """
+                    WITH latest_attempt_ids AS (
+                        SELECT MAX(id) AS id
+                        FROM drill_attempts
+                        GROUP BY game_id, ply, motif
+                    ),
+                    attempt_state AS (
+                        SELECT attempts.game_id,
+                               attempts.ply,
+                               attempts.motif,
+                               attempts.next_due_at
+                        FROM drill_attempts AS attempts
+                        INNER JOIN latest_attempt_ids AS latest
+                            ON attempts.id = latest.id
+                    )
+                    SELECT COUNT(*) AS count
+                    FROM profile_motif_occurrences AS occurrences
+                    LEFT JOIN attempt_state
+                        ON occurrences.game_id = attempt_state.game_id
+                        AND occurrences.ply = attempt_state.ply
+                        AND occurrences.motif_id = attempt_state.motif
+                    WHERE occurrences.fen_before IS NOT NULL
+                        AND occurrences.best_move_uci IS NOT NULL
+                        AND (
+                            attempt_state.next_due_at IS NULL
+                            OR attempt_state.next_due_at <= ?
+                        )
+                    """,
+                    (timestamp,),
+                ).fetchone()["count"]
+            )
+            attempts_row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS attempts,
+                    COALESCE(SUM(correct), 0) AS correct_attempts
+                FROM drill_attempts
+                """
+            ).fetchone()
+            motifs = tuple(
+                DrillMotifStats(
+                    motif=str(row["motif_id"]),
+                    motif_label=str(row["motif_label"]),
+                    trainable_positions=_int(row["trainable_positions"]),
+                    due_positions=_int(row["due_positions"]),
+                    attempts=_int(row["attempts"]),
+                    correct_attempts=_int(row["correct_attempts"]),
+                )
+                for row in connection.execute(
+                    """
+                    WITH trainable AS (
+                        SELECT *
+                        FROM profile_motif_occurrences
+                        WHERE fen_before IS NOT NULL
+                            AND best_move_uci IS NOT NULL
+                    ),
+                    latest_attempt_ids AS (
+                        SELECT MAX(id) AS id
+                        FROM drill_attempts
+                        GROUP BY game_id, ply, motif
+                    ),
+                    attempt_state AS (
+                        SELECT attempts.game_id,
+                               attempts.ply,
+                               attempts.motif,
+                               attempts.next_due_at
+                        FROM drill_attempts AS attempts
+                        INNER JOIN latest_attempt_ids AS latest
+                            ON attempts.id = latest.id
+                    ),
+                    attempt_counts AS (
+                        SELECT
+                            motif,
+                            COUNT(*) AS attempts,
+                            COALESCE(SUM(correct), 0) AS correct_attempts
+                        FROM drill_attempts
+                        GROUP BY motif
+                    )
+                    SELECT
+                        trainable.motif_id,
+                        trainable.motif_label,
+                        COUNT(*) AS trainable_positions,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN attempt_state.next_due_at IS NULL
+                                    OR attempt_state.next_due_at <= ?
+                                THEN 1
+                                ELSE 0
+                            END
+                        ), 0) AS due_positions,
+                        COALESCE(attempt_counts.attempts, 0) AS attempts,
+                        COALESCE(attempt_counts.correct_attempts, 0) AS correct_attempts
+                    FROM trainable
+                    LEFT JOIN attempt_state
+                        ON trainable.game_id = attempt_state.game_id
+                        AND trainable.ply = attempt_state.ply
+                        AND trainable.motif_id = attempt_state.motif
+                    LEFT JOIN attempt_counts
+                        ON trainable.motif_id = attempt_counts.motif
+                    GROUP BY
+                        trainable.motif_id,
+                        trainable.motif_label,
+                        attempt_counts.attempts,
+                        attempt_counts.correct_attempts
+                    ORDER BY trainable_positions DESC, trainable.motif_label ASC
+                    """,
+                    (timestamp,),
+                )
+            )
+
+        return DrillStats(
+            totals=DrillTotals(
+                trainable_positions=trainable_positions,
+                due_positions=due_positions,
+                attempts=_int(attempts_row["attempts"]),
+                correct_attempts=_int(attempts_row["correct_attempts"]),
+            ),
+            motifs=motifs,
+        )
 
     def dashboard(self, *, recent_limit: int = 10) -> ProfileDashboard:
         """Return aggregate facts for the local profile dashboard."""
@@ -366,9 +744,29 @@ class ProfileStore:
                     phase TEXT NOT NULL,
                     loss_cp INTEGER,
                     score_cp INTEGER,
+                    fen_before TEXT,
+                    best_move_uci TEXT,
+                    best_move_san TEXT,
+                    pv_json TEXT,
+                    explanation_text TEXT,
+                    explanation_status TEXT,
+                    evidence_json TEXT,
                     FOREIGN KEY(game_id) REFERENCES profile_games(game_id) ON DELETE CASCADE
                 )
                 """
+            )
+            _ensure_columns(
+                connection,
+                "profile_motif_occurrences",
+                {
+                    "fen_before": "TEXT",
+                    "best_move_uci": "TEXT",
+                    "best_move_san": "TEXT",
+                    "pv_json": "TEXT",
+                    "explanation_text": "TEXT",
+                    "explanation_status": "TEXT",
+                    "evidence_json": "TEXT",
+                },
             )
             connection.execute(
                 """
@@ -380,6 +778,33 @@ class ProfileStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_profile_games_updated
                 ON profile_games(updated_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS drill_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id TEXT NOT NULL,
+                    ply INTEGER NOT NULL,
+                    motif TEXT NOT NULL,
+                    attempted_uci TEXT NOT NULL,
+                    correct INTEGER NOT NULL,
+                    attempted_at TEXT NOT NULL,
+                    next_due_at TEXT NOT NULL,
+                    FOREIGN KEY(game_id) REFERENCES profile_games(game_id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_drill_attempts_motif_due
+                ON drill_attempts(motif, next_due_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_drill_attempts_position
+                ON drill_attempts(game_id, ply, motif)
                 """
             )
             connection.commit()
@@ -411,6 +836,132 @@ def _recent_game(row: sqlite3.Row) -> RecentProfileGame:
         ply_count=_int(row["ply_count"]),
         flagged_moves=_int(row["flagged_moves"]),
     )
+
+
+def _drill_position(row: sqlite3.Row) -> DrillPosition:
+    motif_label = str(row["motif_label"])
+    return DrillPosition(
+        game_id=str(row["game_id"]),
+        ply=_int(row["ply"]),
+        move_number=_int(row["move_number"]),
+        side=_side(str(row["side"])),
+        motif=str(row["motif_id"]),
+        motif_label=motif_label,
+        fen=str(row["fen_before"]),
+        hint_text=f"Find the engine best move for this {motif_label.lower()} position.",
+        context=_drill_context(row),
+    )
+
+
+def _drill_context(row: sqlite3.Row) -> DrillContext:
+    return DrillContext(
+        motif_label=str(row["motif_label"]),
+        phase=_phase(str(row["phase"])),
+        loss_cp=_optional_int(row["loss_cp"]),
+        score_cp=_optional_int(row["score_cp"]),
+        played_move=DrillMove(uci=str(row["uci"]), san=str(row["san"])),
+        pv=_parse_pv_json(_optional_str(row["pv_json"])),
+        explanation_text=_optional_str(row["explanation_text"]),
+        explanation_status=_optional_str(row["explanation_status"]),
+        evidence=_parse_json_object(_optional_str(row["evidence_json"])),
+    )
+
+
+def _prior_correct_streak(
+    connection: sqlite3.Connection,
+    game_id: str,
+    ply: int,
+    motif: str,
+) -> int:
+    streak = 0
+    for row in connection.execute(
+        """
+        SELECT correct
+        FROM drill_attempts
+        WHERE game_id = ?
+            AND ply = ?
+            AND motif = ?
+        ORDER BY id DESC
+        """,
+        (game_id, ply, motif),
+    ):
+        if _int(row["correct"]) != 1:
+            break
+        streak += 1
+    return streak
+
+
+def _next_due_at(now: datetime, *, correct: bool, prior_correct_streak: int) -> str:
+    if correct:
+        correct_streak = prior_correct_streak + 1
+        due_at = now + timedelta(days=2**correct_streak)
+    else:
+        due_at = now + timedelta(hours=1)
+    return _timestamp(due_at)
+
+
+def _datetime_from_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _parse_pv_json(value: str | None) -> tuple[DrillMove, ...]:
+    parsed = _parse_json_list(value)
+    moves: list[DrillMove] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        uci = item.get("uci")
+        san = item.get("san")
+        if isinstance(uci, str) and isinstance(san, str):
+            moves.append(DrillMove(uci=uci, san=san))
+    return tuple(moves)
+
+
+def _parse_json_list(value: str | None) -> list[object]:
+    if value is None:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, list):
+        return cast(list[object], parsed)
+    return []
+
+
+def _parse_json_object(value: str | None) -> dict[str, object] | None:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        return cast(dict[str, object], parsed)
+    return None
+
+
+def _ensure_columns(
+    connection: sqlite3.Connection,
+    table: str,
+    columns: dict[str, str],
+) -> None:
+    existing = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")}
+    for column, definition in columns.items():
+        if column not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _motif_filter(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped or stripped == "any":
+        return None
+    return stripped
 
 
 def _timestamp(value: datetime | None) -> str:
@@ -459,3 +1010,17 @@ def _source(value: str) -> GameSource:
     if value == "local_play":
         return "local_play"
     return "pgn_upload"
+
+
+def _side(value: str) -> Side:
+    if value == "black":
+        return "black"
+    return "white"
+
+
+def _phase(value: str) -> GamePhase:
+    if value == "opening":
+        return "opening"
+    if value == "endgame":
+        return "endgame"
+    return "middlegame"

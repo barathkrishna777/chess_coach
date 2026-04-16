@@ -15,7 +15,7 @@ from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMo
 from chess_ml.explanation.models import PROMPT_VERSION, ExplanationRequest
 
 SYSTEM_PROMPT = """You are a chess coach explaining one mistake to a 1200-2000 rated club player.
-Stockfish is ground truth: never contradict the provided engine best move or PV.
+Stockfish is ground truth: never contradict the provided engine best move or main line.
 Use only the supplied FEN, played move, actual game line, Stockfish line, eval swing, and motif evidence; do not invent tactics.
 Compare what the player did with what Stockfish recommended, then explain what changed.
 Reference concrete pieces, squares, or moves from those two supplied lines.
@@ -106,7 +106,9 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
             "schema": {"text": "string", "referenced_move_uci": "string|null"},
             "max_sentences": 3,
             "max_words": 70,
-            "required_content": "Compare the played move or actual line with Stockfish's best move or PV.",
+            "required_content": (
+                "Compare the played move or actual line with Stockfish's best move or main line."
+            ),
         },
     }
     user_prompt = (
@@ -401,9 +403,9 @@ def _fallback_intro(
 def _fallback_proof_sentence(pv_label: str, loss_cp: int | None) -> str | None:
     loss = _loss_label(loss_cp)
     if pv_label and loss:
-        return f"The supplied PV starts {pv_label}, and the recorded loss is {loss}."
+        return f"The supplied main line starts {pv_label}, and the recorded loss is {loss}."
     if pv_label:
-        return f"The supplied PV starts {pv_label}."
+        return f"The supplied main line starts {pv_label}."
     if loss:
         return f"The recorded loss is {loss}."
     return None

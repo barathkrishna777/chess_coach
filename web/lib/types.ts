@@ -193,6 +193,61 @@ export type ProfileDashboard = {
   recent_games: RecentProfileGame[];
 };
 
+export type TrainingContext = {
+  motif_label: string;
+  phase: "opening" | "middlegame" | "endgame";
+  loss_cp: number | null;
+  score_cp: number | null;
+  played_move: EngineMove;
+  pv: EngineMove[];
+  explanation_text: string | null;
+  explanation_status: string | null;
+  evidence: Record<string, unknown> | null;
+};
+
+export type TrainingDrill = {
+  schema_version: "training-drill.v1";
+  drill_id: string;
+  game_id: string;
+  ply: number;
+  move_number: number;
+  side: "white" | "black";
+  motif: string;
+  motif_label: string;
+  fen: string;
+  hint_text: string;
+  context: TrainingContext;
+};
+
+export type TrainingResult = {
+  schema_version: "training-result.v1";
+  correct: boolean;
+  attempted_uci: string;
+  best_move: EngineMove;
+  next_due_at: string;
+  context: TrainingContext;
+};
+
+export type TrainingStats = {
+  schema_version: "training-stats.v1";
+  totals: {
+    trainable_positions: number;
+    due_positions: number;
+    attempts: number;
+    correct_attempts: number;
+  };
+  motifs: TrainingMotifStats[];
+};
+
+export type TrainingMotifStats = {
+  motif: string;
+  motif_label: string;
+  trainable_positions: number;
+  due_positions: number;
+  attempts: number;
+  correct_attempts: number;
+};
+
 export type ProfileMotifAggregate = {
   id: string;
   label: string;

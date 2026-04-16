@@ -66,6 +66,7 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-3">
             <NavLink href="/">Review PGN</NavLink>
             <NavLink href="/play">Play</NavLink>
+            <NavLink href="/train">Train</NavLink>
             <HealthIndicator />
           </div>
         </header>
@@ -170,7 +171,15 @@ function MotifList({
           {motifs.map((motif) => (
             <div key={motif.id} className="grid gap-2">
               <div className="flex items-baseline justify-between gap-3">
-                <p className="font-medium">{motif.label}</p>
+                <div>
+                  <p className="font-medium">{motif.label}</p>
+                  <Link
+                    href={`/train?motif=${encodeURIComponent(motif.id)}`}
+                    className="mt-1 inline-flex rounded-md border border-[#37786f] px-2 py-1 text-xs font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
+                  >
+                    Drill this motif
+                  </Link>
+                </div>
                 <p className="shrink-0 text-sm text-[#4a5a54]">
                   {motif.count} · {formatRate(motif.rate_per_100_moves)} / 100
                 </p>

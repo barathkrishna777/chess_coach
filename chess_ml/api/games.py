@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import time
 from collections.abc import Sequence
@@ -754,6 +755,23 @@ def profile_review_from_game(game: AnnotatedGameModel) -> ProfileGameReview:
                 phase=motif.evidence.phase,
                 loss_cp=move.loss_cp,
                 score_cp=motif.score_cp,
+                fen_before=move.fen_before,
+                best_move_uci=(
+                    move.analysis_before.best_move.uci
+                    if move.analysis_before.best_move is not None
+                    else None
+                ),
+                best_move_san=(
+                    move.analysis_before.best_move.san
+                    if move.analysis_before.best_move is not None
+                    else None
+                ),
+                pv_json=_move_refs_json(move.analysis_before.pv),
+                explanation_text=move.explanation.text if move.explanation is not None else None,
+                explanation_status=(
+                    move.explanation.status if move.explanation is not None else None
+                ),
+                evidence_json=_motif_evidence_json(motif.evidence),
             )
             for move in game.moves
             for motif in move.motifs
@@ -772,6 +790,46 @@ def _profile_source(headers: dict[str, str]) -> Literal["pgn_upload", "local_pla
     if event == "chess_ml local play":
         return "local_play"
     return "pgn_upload"
+
+
+def _move_refs_json(moves: Sequence[MoveRefModel]) -> str:
+    return json.dumps(
+        [{"uci": move.uci, "san": move.san} for move in moves],
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _motif_evidence_json(evidence: MotifEvidenceModel) -> str:
+    piece = evidence.piece
+    best_move = evidence.best_move
+    opponent_reply = evidence.opponent_reply
+    payload: dict[str, object] = {
+        "threshold_cp": evidence.threshold_cp,
+        "score_kind": evidence.score_kind,
+        "phase": evidence.phase,
+        "piece": (
+            {
+                "color": piece.color,
+                "role": piece.role,
+                "square": piece.square,
+            }
+            if piece is not None
+            else None
+        ),
+        "attackers": list(evidence.attackers),
+        "defenders": list(evidence.defenders),
+        "best_move": (
+            {"uci": best_move.uci, "san": best_move.san} if best_move is not None else None
+        ),
+        "opponent_reply": (
+            {"uci": opponent_reply.uci, "san": opponent_reply.san}
+            if opponent_reply is not None
+            else None
+        ),
+        "related_ply": evidence.related_ply,
+    }
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
 def _optional_elo(value: str | None) -> int | None:

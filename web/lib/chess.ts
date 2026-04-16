@@ -63,3 +63,18 @@ export function uciToKeyPair(uci: string): [Key, Key] {
 export function uciFromTo(uci: string): string {
   return uci.slice(0, 4);
 }
+
+/**
+ * Build the exact UCI string for a legal from/to move in a FEN.
+ * Promotion positions default to queen when chessground only supplies squares.
+ */
+export function uciForMoveFromFen(fen: string, from: string, to: string): string {
+  const chess = new Chess(fen);
+  const matchingMove = chess
+    .moves({ verbose: true })
+    .find((move) => move.from === from && move.to === to);
+  if (!matchingMove) {
+    return `${from}${to}`;
+  }
+  return `${matchingMove.from}${matchingMove.to}${matchingMove.promotion ?? ""}`;
+}

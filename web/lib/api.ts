@@ -10,6 +10,9 @@ import type {
   PlayOpponentRequest,
   PlayOpponentsStatus,
   ProfileDashboard,
+  TrainingDrill,
+  TrainingResult,
+  TrainingStats,
 } from "@/lib/types";
 
 const API_BASE_URL = "http://localhost:8000";
@@ -18,6 +21,7 @@ const EXPLAIN_URL = `${API_BASE_URL}/api/games/explain`;
 const EXPLAIN_STATUS_URL = `${API_BASE_URL}/api/games/explain/status`;
 const PLAY_URL = `${API_BASE_URL}/api/play`;
 const PROFILE_URL = `${API_BASE_URL}/api/profile/me`;
+const TRAIN_URL = `${API_BASE_URL}/api/train`;
 
 export class ApiRequestError extends Error {
   readonly status: number | null;
@@ -112,6 +116,30 @@ export async function getProfileDashboard(): Promise<ProfileDashboard> {
   return requestJson<ProfileDashboard>(PROFILE_URL);
 }
 
+export async function getNextDrill(motif?: string): Promise<TrainingDrill> {
+  const search = new URLSearchParams();
+  if (motif && motif !== "any") {
+    search.set("motif", motif);
+  }
+  const query = search.toString();
+  return requestJson<TrainingDrill>(`${TRAIN_URL}/next${query ? `?${query}` : ""}`);
+}
+
+export async function submitDrillResult(
+  drillId: string,
+  attemptedUci: string,
+): Promise<TrainingResult> {
+  return requestJson<TrainingResult>(`${TRAIN_URL}/result`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ drill_id: drillId, attempted_uci: attemptedUci }),
+  });
+}
+
+export async function getTrainingStats(): Promise<TrainingStats> {
+  return requestJson<TrainingStats>(`${TRAIN_URL}/stats`);
+}
+
 export function userFacingErrorMessage(error: unknown): string {
   if (error instanceof ApiRequestError) {
     if (error.status === null) {
@@ -131,6 +159,12 @@ export function userFacingErrorMessage(error: unknown): string {
     }
     if (error.code === "opponent_unavailable") {
       return "No local play opponent is available. Install Stockfish or set CHESS_ML_PLAY_STOCKFISH_PATH, then retry.";
+    }
+    if (error.code === "no_due_drill") {
+      return "No due drills are available for that motif yet.";
+    }
+    if (error.code === "drill_not_found" || error.code === "invalid_drill_id") {
+      return "That drill is no longer available. Load the next puzzle and try again.";
     }
     return error.message;
   }
