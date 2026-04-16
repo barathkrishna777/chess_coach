@@ -17,10 +17,12 @@ from pydantic import BaseModel
 from chess_ml import __version__
 from chess_ml.api.games import router as games_router
 from chess_ml.api.play import router as play_router
+from chess_ml.api.profile import router as profile_router
 from chess_ml.engine.opponent import StockfishPlayOpponent
 from chess_ml.engine.stockfish import StockfishPool, StockfishUnavailableError
 from chess_ml.explanation.service import service_from_env
 from chess_ml.play.session import InMemoryPlayStore
+from chess_ml.profile.store import ProfileStore
 
 
 @asynccontextmanager
@@ -30,6 +32,7 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncIterator[None]:
     fastapi_app.state.review_lock = asyncio.Lock()
     fastapi_app.state.explanation_service = service_from_env()
     fastapi_app.state.play_store = InMemoryPlayStore()
+    fastapi_app.state.profile_store = ProfileStore()
     pool = StockfishPool.from_env()
     play_opponent = StockfishPlayOpponent.from_env()
     try:
@@ -92,3 +95,4 @@ def health() -> HealthResponse:
 
 app.include_router(games_router)
 app.include_router(play_router)
+app.include_router(profile_router)

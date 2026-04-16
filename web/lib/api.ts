@@ -6,6 +6,7 @@ import type {
   ExplanationStatus,
   MoveExplanation,
   PlayState,
+  ProfileDashboard,
 } from "@/lib/types";
 
 const API_BASE_URL = "http://localhost:8000";
@@ -13,6 +14,7 @@ const GAMES_URL = `${API_BASE_URL}/api/games`;
 const EXPLAIN_URL = `${API_BASE_URL}/api/games/explain`;
 const EXPLAIN_STATUS_URL = `${API_BASE_URL}/api/games/explain/status`;
 const PLAY_URL = `${API_BASE_URL}/api/play`;
+const PROFILE_URL = `${API_BASE_URL}/api/profile/me`;
 
 export async function analyzePgn(pgn: string): Promise<AnnotatedGame> {
   const response = await fetch(GAMES_URL, {
@@ -93,6 +95,15 @@ export async function resignPlayGame(gameId: string): Promise<PlayState> {
     throw new Error(errorMessage(body, response.status));
   }
   return body as PlayState;
+}
+
+export async function getProfileDashboard(): Promise<ProfileDashboard> {
+  const response = await fetch(PROFILE_URL);
+  const body: unknown = await response.json();
+  if (!response.ok) {
+    throw new Error(errorMessage(body, response.status));
+  }
+  return body as ProfileDashboard;
 }
 
 export function errorMessage(body: unknown, status: number): string {

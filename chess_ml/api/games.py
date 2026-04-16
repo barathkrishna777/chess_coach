@@ -29,6 +29,13 @@ from chess_ml.engine.stockfish import (
 from chess_ml.explanation.models import ExplanationRequest, LineMove, MoveExplanation
 from chess_ml.explanation.service import ExplanationService, ExplanationServiceStatus
 from chess_ml.ingestion.pgn import ParsedPgnGame, ParsedPgnMove, PgnParseError, parse_pgn
+from chess_ml.profile.store import (
+    ProfileGameReview,
+    ProfileMotifOccurrence,
+    ProfilePlayer,
+    ProfilePlayers,
+    ProfileStore,
+)
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -275,11 +282,15 @@ async def create_annotated_game(
 
     await review_lock.acquire()
     try:
-        return await _annotate_game(
+        annotated_game = await _annotate_game(
             parsed_game,
             pool=pool,
             depth=pool.depth,
         )
+        profile_store = cast(ProfileStore | None, getattr(request.app.state, "profile_store", None))
+        if profile_store is not None:
+            profile_store.save_review(_profile_review(annotated_game))
+        return annotated_game
     except AnalysisTimeoutError:
         return _error_response(
             504,
@@ -692,6 +703,43 @@ def _players(headers: dict[str, str]) -> PlayersModel:
         white=PlayerModel(name=headers.get("White"), elo=_optional_elo(headers.get("WhiteElo"))),
         black=PlayerModel(name=headers.get("Black"), elo=_optional_elo(headers.get("BlackElo"))),
     )
+
+
+def _profile_review(game: AnnotatedGameModel) -> ProfileGameReview:
+    return ProfileGameReview(
+        game_id=game.game_id,
+        players=ProfilePlayers(
+            white=ProfilePlayer(name=game.players.white.name, elo=game.players.white.elo),
+            black=ProfilePlayer(name=game.players.black.name, elo=game.players.black.elo),
+        ),
+        result=game.result,
+        source=_profile_source(game.headers),
+        ply_count=len(game.moves),
+        motif_occurrences=tuple(
+            ProfileMotifOccurrence(
+                ply=move.ply,
+                move_number=move.move_number,
+                side=move.side,
+                san=move.san,
+                uci=move.uci,
+                motif_id=motif.id,
+                motif_label=motif.label,
+                severity=motif.severity,
+                phase=motif.evidence.phase,
+                loss_cp=move.loss_cp,
+                score_cp=motif.score_cp,
+            )
+            for move in game.moves
+            for motif in move.motifs
+        ),
+    )
+
+
+def _profile_source(headers: dict[str, str]) -> Literal["pgn_upload", "local_play"]:
+    event = headers.get("Event", "").strip().lower()
+    if event == "chess_ml local play":
+        return "local_play"
+    return "pgn_upload"
 
 
 def _optional_elo(value: str | None) -> int | None:

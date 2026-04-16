@@ -149,6 +149,47 @@ export type PlayState = {
   pgn: string | null;
 };
 
+export type ProfileDashboard = {
+  schema_version: "profile-dashboard.v1";
+  totals: {
+    games_reviewed: number;
+    moves_reviewed: number;
+    flagged_moves: number;
+    motif_occurrences: number;
+    motif_rate_per_100_moves: number;
+  };
+  motifs: ProfileMotifAggregate[];
+  phase_breakdown: ProfilePhaseAggregate[];
+  recent_games: RecentProfileGame[];
+};
+
+export type ProfileMotifAggregate = {
+  id: string;
+  label: string;
+  count: number;
+  rate_per_100_moves: number;
+};
+
+export type ProfilePhaseAggregate = {
+  phase: "opening" | "middlegame" | "endgame";
+  count: number;
+  rate_per_100_moves: number;
+};
+
+export type RecentProfileGame = {
+  game_id: string;
+  players: {
+    white: { name: string | null; elo: number | null };
+    black: { name: string | null; elo: number | null };
+  };
+  result: "1-0" | "0-1" | "1/2-1/2" | "*";
+  source: "pgn_upload" | "local_play";
+  created_at: string;
+  updated_at: string;
+  ply_count: number;
+  flagged_moves: number;
+};
+
 export type ApiErrorEnvelope = {
   error?: {
     code?: string;

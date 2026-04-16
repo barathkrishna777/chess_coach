@@ -1,1 +1,1 @@
-"""Per-user profile store: SQLite schema and weakness aggregation (Slice 4)."""
+"""Local profile store: SQLite schema and weakness aggregation."""

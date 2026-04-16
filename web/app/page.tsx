@@ -64,6 +64,12 @@ export default function Home() {
             >
               Play a game
             </Link>
+            <Link
+              href="/dashboard"
+              className="rounded-md border border-[#37786f] px-3 py-2 text-sm font-semibold text-[#2c625a] transition hover:bg-[#edf4f1]"
+            >
+              Dashboard
+            </Link>
             <HealthIndicator />
           </div>
         </header>

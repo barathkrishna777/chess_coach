@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from chess_ml.explanation.models import PROMPT_VERSION
+from chess_ml.profile.db import default_db_path
 
 KEY_VERSION = "explanation-cache-key.v1"
-DEFAULT_DB_PATH = Path("data/chess_ml.sqlite3")
 
 
 @dataclass(frozen=True)
@@ -115,13 +114,6 @@ class ExplanationCache:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         return connection
-
-
-def default_db_path() -> Path:
-    value = os.environ.get("CHESS_ML_DB_PATH")
-    if value is None or not value.strip():
-        return DEFAULT_DB_PATH
-    return Path(value)
 
 
 def cache_key_for_facts(facts: dict[str, Any]) -> str:
