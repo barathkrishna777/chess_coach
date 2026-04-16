@@ -1,0 +1,30 @@
+[run]
+seed = 20260416
+
+[data]
+source_pgn = "tests/fixtures/classifier/slice8-mini.pgn"
+dataset_path = "data/processed/slice8-v1.parquet"
+max_games = 8
+max_plies_per_game = 80
+analysis_depth = 4
+
+[model]
+checkpoint_path = "checkpoints/classifier/slice8-v1.pt"
+hidden_channels = 32
+dropout = 0.1
+
+[training]
+epochs = 8
+batch_size = 16
+learning_rate = 0.003
+train_fraction = 0.75
+
+[eval]
+report_path = "docs/evals/009-slice8-classifier-v1.json"
+
+[thresholds]
+hanging_piece = 0.62
+missed_tactic = 0.62
+allowed_tactic = 0.62
+endgame_slip = 0.62
+opening_inaccuracy = 0.62

@@ -1,0 +1,32 @@
+[Event "Slice8 Fixture 1"]
+[Site "Local"]
+[Date "2026.04.16"]
+[White "Ada"]
+[Black "Turing"]
+[WhiteElo "1500"]
+[BlackElo "1600"]
+[Result "*"]
+
+1. e4 e5 2. Qh5 Nf6 3. Bc4 Nc6 4. Qxf7# *
+
+[Event "Slice8 Fixture 2"]
+[Site "Local"]
+[Date "2026.04.16"]
+[White "Grace"]
+[Black "Noether"]
+[WhiteElo "1700"]
+[BlackElo "1650"]
+[Result "*"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Bg5 Be7 5. e3 O-O 6. Nf3 h6 7. Bh4 b6 *
+
+[Event "Slice8 Fixture 3"]
+[Site "Local"]
+[Date "2026.04.16"]
+[White "Hypatia"]
+[Black "Lovelace"]
+[WhiteElo "1400"]
+[BlackElo "1450"]
+[Result "*"]
+
+1. e4 d5 2. exd5 Qxd5 3. Nc3 a6 4. Nxd5 *

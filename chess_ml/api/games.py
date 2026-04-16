@@ -151,7 +151,7 @@ class MotifModel(BaseModel):
     ]
     label: str
     severity: Literal["inaccuracy", "mistake", "blunder"]
-    source: Literal["heuristic"]
+    source: Literal["heuristic", "learned", "ensemble"]
     score_cp: int | None
     evidence: MotifEvidenceModel
 

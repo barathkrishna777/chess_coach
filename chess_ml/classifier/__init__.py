@@ -1,1 +1,1 @@
-"""Weakness classifier: heuristic motifs in Slice 2, learned model in Slice 6."""
+"""Weakness classifier: heuristic motifs plus optional Slice 8 learned model."""

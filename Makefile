@@ -9,8 +9,8 @@ help:
 	@echo "  setup-maia - download Maia weights for local play"
 	@echo "  check    - ruff + mypy + pytest (must pass before commit)"
 	@echo "  serve    - boot API (8000) and web (3000) concurrently"
-	@echo "  ingest   - download Lichess slice and build dataset (Slice 6)"
-	@echo "  train    - train the weakness classifier (Slice 6)"
+	@echo "  ingest   - build the Slice 8 weak-labeled classifier dataset"
+	@echo "  train    - train the Slice 8 learned weakness classifier"
 	@echo "  demo     - seed sample games for demo (Slice 7)"
 	@echo "  clean    - remove caches and build artifacts"
 
@@ -48,12 +48,10 @@ serve-web:
 	cd web && npm run dev
 
 ingest:
-	@echo "Slice 6 — not yet implemented"
-	@exit 1
+	$(PYTHON) -m chess_ml.ingestion.lichess
 
-train:
-	@echo "Slice 6 — not yet implemented"
-	@exit 1
+train: ingest
+	$(PYTHON) -m chess_ml.classifier.train
 
 demo:
 	@echo "Slice 7 — not yet implemented"

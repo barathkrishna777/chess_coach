@@ -28,7 +28,7 @@ export type Motif = {
     | "opening_inaccuracy";
   label: string;
   severity: MotifSeverity;
-  source: "heuristic";
+  source: "heuristic" | "learned" | "ensemble";
   score_cp: number | null;
   evidence: {
     threshold_cp: number;

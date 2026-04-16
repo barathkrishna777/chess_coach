@@ -19,7 +19,7 @@ MotifId: TypeAlias = Literal[
     "opening_inaccuracy",
 ]
 MotifSeverity: TypeAlias = Literal["inaccuracy", "mistake", "blunder"]
-MotifSource: TypeAlias = Literal["heuristic"]
+MotifSource: TypeAlias = Literal["heuristic", "learned", "ensemble"]
 GamePhase: TypeAlias = Literal["opening", "middlegame", "endgame"]
 PieceRole: TypeAlias = Literal["pawn", "knight", "bishop", "rook", "queen"]
 ScoreKind: TypeAlias = Literal["cp", "mate"]

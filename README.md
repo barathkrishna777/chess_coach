@@ -86,6 +86,36 @@ ollama pull qwen3:8b
 ollama serve
 ```
 
+## Learned classifier
+
+Slice 8 adds an optional local PyTorch classifier on top of the heuristic motif
+baseline. Heuristics always run. If no compatible checkpoint exists at
+`checkpoints/classifier/slice8-v1.pt`, review stays on heuristic v0 and `make serve`
+continues to work on a fresh clone.
+
+The default config is `configs/classifier/slice8-v1.toml`. It uses a tiny checked-in
+fixture PGN so the full path can run without downloading Lichess data:
+
+```bash
+make ingest
+make train
+```
+
+`make ingest` writes weak-labeled parquet examples to `data/processed/`.
+`make train` refreshes the gitignored checkpoint and writes the reproducible eval
+report at `docs/evals/009-slice8-classifier-v1.json`.
+
+Configuration:
+
+- `CHESS_ML_CLASSIFIER_CONFIG`: optional config path. Default
+  `configs/classifier/slice8-v1.toml`.
+- `CHESS_ML_CLASSIFIER_CHECKPOINT`: optional checkpoint path. Default comes from the
+  config. Set it to an empty string to force heuristic-only classification.
+
+The learned classifier never performs chess analysis. Stockfish still supplies evals,
+PVs, and best moves; the model only contributes motif probabilities that must be
+grounded in those facts before appearing in review.
+
 ## Check
 
 ```bash
@@ -96,7 +126,7 @@ Runs ruff, mypy, and pytest. Must pass before any commit.
 
 ## Status
 
-Slices 0-6 are implemented through the local profile dashboard. Current app supports
+Slices 0-8 are implemented through the learned classifier v1 path. Current app supports
 PGN review, Stockfish analysis, heuristic motifs, lazy grounded coach notes, local play
 against Maia with Stockfish fallback, post-game review, and `/dashboard` profile aggregation.
 See [docs/plans/001-mvp.md](docs/plans/001-mvp.md) for the updated slice map.
