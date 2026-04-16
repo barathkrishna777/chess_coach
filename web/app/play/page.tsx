@@ -13,6 +13,7 @@ import {
   resignPlayGame,
   startPlayGame,
   submitPlayMove,
+  userFacingErrorMessage,
 } from "@/lib/api";
 import type {
   AnnotatedGame,
@@ -84,7 +85,7 @@ export default function PlayPage() {
         }),
       );
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(userFacingErrorMessage(caught));
     } finally {
       setIsStarting(false);
     }
@@ -108,7 +109,7 @@ export default function PlayPage() {
         await reviewFinishedGame(nextState);
       }
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(userFacingErrorMessage(caught));
     } finally {
       setIsSubmittingMove(false);
     }
@@ -123,7 +124,7 @@ export default function PlayPage() {
       setPlayState(nextState);
       await reviewFinishedGame(nextState);
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(userFacingErrorMessage(caught));
     } finally {
       setIsSubmittingMove(false);
     }
@@ -138,6 +139,8 @@ export default function PlayPage() {
     setIsReviewing(true);
     try {
       setReviewGame(await analyzePgn(nextState.pgn));
+    } catch (caught: unknown) {
+      setError(userFacingErrorMessage(caught));
     } finally {
       setIsReviewing(false);
     }
@@ -275,7 +278,11 @@ export default function PlayPage() {
                 ) : null}
 
                 {error ? (
-                  <p className="mt-4 rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]">
+                  <p
+                    role="alert"
+                    aria-live="polite"
+                    className="mt-4 rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]"
+                  >
                     {error}
                   </p>
                 ) : null}

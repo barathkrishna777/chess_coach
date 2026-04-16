@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import HealthIndicator from "@/components/HealthIndicator";
-import { getProfileDashboard } from "@/lib/api";
+import { getProfileDashboard, userFacingErrorMessage } from "@/lib/api";
 import type {
   ProfileDashboard,
   ProfileMotifAggregate,
@@ -29,7 +29,7 @@ export default function DashboardPage() {
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
-          setError(caught instanceof Error ? caught.message : String(caught));
+          setError(userFacingErrorMessage(caught));
         }
       })
       .finally(() => {
@@ -71,7 +71,11 @@ export default function DashboardPage() {
         </header>
 
         {error ? (
-          <p className="rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]">
+          <p
+            role="alert"
+            aria-live="polite"
+            className="rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]"
+          >
             {error}
           </p>
         ) : null}
@@ -103,21 +107,46 @@ function SummaryGrid({ profile }: { profile: ProfileDashboard }) {
   const totals = profile.totals;
   return (
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-      <SummaryTile label="Games" value={totals.games_reviewed.toString()} />
-      <SummaryTile label="Moves" value={totals.moves_reviewed.toString()} />
-      <SummaryTile label="Flagged" value={totals.flagged_moves.toString()} />
-      <SummaryTile label="Motifs" value={totals.motif_occurrences.toString()} />
+      <SummaryTile
+        label="Games"
+        value={totals.games_reviewed.toString()}
+        testId="summary-games"
+      />
+      <SummaryTile
+        label="Moves"
+        value={totals.moves_reviewed.toString()}
+        testId="summary-moves"
+      />
+      <SummaryTile
+        label="Flagged"
+        value={totals.flagged_moves.toString()}
+        testId="summary-flagged"
+      />
+      <SummaryTile
+        label="Motifs"
+        value={totals.motif_occurrences.toString()}
+        testId="summary-motifs"
+      />
       <SummaryTile
         label="Per 100 moves"
         value={formatRate(totals.motif_rate_per_100_moves)}
+        testId="summary-rate"
       />
     </section>
   );
 }
 
-function SummaryTile({ label, value }: { label: string; value: string }) {
+function SummaryTile({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string;
+  testId: string;
+}) {
   return (
-    <div className="rounded-md border border-[#d5ddd8] bg-white p-4">
+    <div data-testid={testId} className="rounded-md border border-[#d5ddd8] bg-white p-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-[#65766f]">
         {label}
       </p>

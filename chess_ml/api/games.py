@@ -7,7 +7,7 @@ import hashlib
 import os
 import time
 from collections.abc import Sequence
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal, Protocol, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -46,6 +46,13 @@ DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 14.5
 
 class AnalysisTimeoutError(TimeoutError):
     """Raised when Stockfish analysis exceeds the review budget."""
+
+
+class PositionEvaluator(Protocol):
+    """Stockfish-like evaluator used by review and deterministic demo seeding."""
+
+    async def evaluate(self, fen: str, *, depth: int | None = None) -> EngineEvaluation:
+        """Return engine analysis for one FEN."""
 
 
 class CreateGameRequest(BaseModel):
@@ -282,14 +289,14 @@ async def create_annotated_game(
 
     await review_lock.acquire()
     try:
-        annotated_game = await _annotate_game(
+        annotated_game = await annotate_game(
             parsed_game,
-            pool=pool,
+            evaluator=pool,
             depth=pool.depth,
         )
         profile_store = cast(ProfileStore | None, getattr(request.app.state, "profile_store", None))
         if profile_store is not None:
-            profile_store.save_review(_profile_review(annotated_game))
+            profile_store.save_review(profile_review_from_game(annotated_game))
         return annotated_game
     except AnalysisTimeoutError:
         return _error_response(
@@ -305,17 +312,19 @@ async def create_annotated_game(
         review_lock.release()
 
 
-async def _annotate_game(
+async def annotate_game(
     parsed_game: ParsedPgnGame,
     *,
-    pool: StockfishPool,
+    evaluator: PositionEvaluator,
     depth: int,
 ) -> AnnotatedGameModel:
+    """Analyze one parsed PGN with an engine-like evaluator and classify motifs."""
+
     started_at = time.perf_counter()
     unique_fens = _unique_positions(parsed_game)
     try:
         evaluations = await asyncio.wait_for(
-            _evaluate_positions(unique_fens, pool=pool, depth=depth),
+            _evaluate_positions(unique_fens, evaluator=evaluator, depth=depth),
             timeout=_analysis_timeout_seconds(),
         )
     except TimeoutError as exc:
@@ -356,6 +365,21 @@ async def _annotate_game(
     )
 
 
+async def _annotate_game(
+    parsed_game: ParsedPgnGame,
+    *,
+    evaluator: PositionEvaluator | None = None,
+    pool: PositionEvaluator | None = None,
+    depth: int,
+) -> AnnotatedGameModel:
+    """Backward-compatible wrapper for older tests and scripts."""
+
+    evaluator = evaluator or pool
+    if evaluator is None:
+        raise TypeError("Expected evaluator or pool for game annotation.")
+    return await annotate_game(parsed_game, evaluator=evaluator, depth=depth)
+
+
 @router.post("/explain", response_model=MoveExplanationModel)
 async def explain_move(
     payload: ExplainMoveRequest,
@@ -393,11 +417,11 @@ async def explanation_status(request: Request) -> ExplanationStatusModel:
 async def _evaluate_positions(
     fens: list[str],
     *,
-    pool: StockfishPool,
+    evaluator: PositionEvaluator,
     depth: int,
 ) -> dict[str, EngineEvaluation]:
     async def evaluate_one(fen: str) -> tuple[str, EngineEvaluation]:
-        return fen, await pool.evaluate(fen, depth=depth)
+        return fen, await evaluator.evaluate(fen, depth=depth)
 
     tasks = [asyncio.create_task(evaluate_one(fen)) for fen in fens]
     try:
@@ -705,7 +729,9 @@ def _players(headers: dict[str, str]) -> PlayersModel:
     )
 
 
-def _profile_review(game: AnnotatedGameModel) -> ProfileGameReview:
+def profile_review_from_game(game: AnnotatedGameModel) -> ProfileGameReview:
+    """Convert an annotated review into profile-store rows."""
+
     return ProfileGameReview(
         game_id=game.game_id,
         players=ProfilePlayers(
@@ -733,6 +759,12 @@ def _profile_review(game: AnnotatedGameModel) -> ProfileGameReview:
             for motif in move.motifs
         ),
     )
+
+
+def _profile_review(game: AnnotatedGameModel) -> ProfileGameReview:
+    """Backward-compatible wrapper for older tests and scripts."""
+
+    return profile_review_from_game(game)
 
 
 def _profile_source(headers: dict[str, str]) -> Literal["pgn_upload", "local_play"]:

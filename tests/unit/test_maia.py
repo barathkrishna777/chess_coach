@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,9 @@ def test_registry_explicit_maia_requires_setup(tmp_path: Path) -> None:
 
 
 def test_real_maia_smoke_when_lc0_and_weights_exist() -> None:
+    if os.environ.get("CHESS_ML_RUN_REAL_MAIA_SMOKE") != "1":
+        pytest.skip("Set CHESS_ML_RUN_REAL_MAIA_SMOKE=1 to run the real Lc0/Maia smoke test.")
+
     config = MaiaConfig.from_env(rating=1500)
     if not config.available:
         pytest.skip("Lc0 and Maia 1500 weights are not both available.")

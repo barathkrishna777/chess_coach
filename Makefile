@@ -1,4 +1,4 @@
-.PHONY: help setup setup-maia check lint typecheck test serve serve-api serve-web ingest train demo clean
+.PHONY: help setup setup-maia check lint typecheck test serve serve-api serve-web ingest train demo e2e clean
 
 PYTHON := uv run python
 UVICORN := uv run uvicorn
@@ -11,7 +11,8 @@ help:
 	@echo "  serve    - boot API (8000) and web (3000) concurrently"
 	@echo "  ingest   - build the Slice 8 weak-labeled classifier dataset"
 	@echo "  train    - train the Slice 8 learned weakness classifier"
-	@echo "  demo     - seed sample games for demo (Slice 7)"
+	@echo "  demo     - seed three Slice 9 sample games into the local profile DB"
+	@echo "  e2e      - run the Playwright MVP end-to-end suite"
 	@echo "  clean    - remove caches and build artifacts"
 
 setup:
@@ -54,8 +55,10 @@ train: ingest
 	$(PYTHON) -m chess_ml.classifier.train
 
 demo:
-	@echo "Slice 7 — not yet implemented"
-	@exit 1
+	$(PYTHON) -m chess_ml.profile.demo
+
+e2e:
+	cd web && npm run e2e
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache

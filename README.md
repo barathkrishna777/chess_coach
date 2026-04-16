@@ -10,7 +10,7 @@ See [CLAUDE.md](CLAUDE.md) for project conventions and [docs/plans/001-mvp.md](d
 - [uv](https://github.com/astral-sh/uv) for Python
 - Node.js 20+
 - Stockfish: `brew install stockfish`
-- Maia play opponent: `brew install lc0`
+- Optional Maia play opponent: `brew install lc0`
 - Optional local explanations: [Ollama](https://ollama.com), then
   `ollama pull qwen3:8b`
 
@@ -24,13 +24,31 @@ This installs Python dependencies via uv (using Python 3.11), installs npm
 dependencies for the web app, and downloads Maia 1100/1500/1900 weights into
 `checkpoints/maia/`. The weights are gitignored.
 
+For the core PGN review, seeded dashboard, and Stockfish fallback play demo, only
+Stockfish is required after dependencies are installed. Maia and Ollama improve
+the local experience, but they are not required for `make demo`.
+
 If you only need to refresh Maia weights later:
 
 ```bash
 make setup-maia
 ```
 
-## Run
+## Fresh-Clone Demo
+
+Seed a local profile database with three checked-in Stockfish-analyzed games:
+
+```bash
+make demo
+```
+
+`make demo` writes to `data/chess_ml.sqlite3` by default, or to
+`CHESS_ML_DB_PATH` when that environment variable is set. It is idempotent:
+rerunning it refreshes the same three demo games instead of duplicating profile
+rows. The seeder requires Stockfish because the profile data must be grounded in
+engine analysis; it does not require Maia weights or Ollama.
+
+Then run the app:
 
 ```bash
 make serve
@@ -124,9 +142,29 @@ make check
 
 Runs ruff, mypy, and pytest. Must pass before any commit.
 
+Frontend verification:
+
+```bash
+cd web && npm run typecheck
+cd web && npm run build
+```
+
+End-to-end verification:
+
+```bash
+make e2e
+```
+
+The Playwright suite starts FastAPI and Next.js locally, seeds a temporary demo
+database, disables coach providers and learned checkpoint loading, and forces the
+Maia-unavailable path so auto play uses the Stockfish fallback. If Playwright has
+not installed a browser yet, run `cd web && npx playwright install chromium`.
+
 ## Status
 
-Slices 0-8 are implemented through the learned classifier v1 path. Current app supports
-PGN review, Stockfish analysis, heuristic motifs, lazy grounded coach notes, local play
-against Maia with Stockfish fallback, post-game review, and `/dashboard` profile aggregation.
-See [docs/plans/001-mvp.md](docs/plans/001-mvp.md) for the updated slice map.
+Slices 0-9 are implemented through the learned classifier v1 path, with the Slice
+10 coach-grounding repair also in place. Current app supports PGN review,
+Stockfish analysis, heuristic and optional learned motifs, lazy grounded coach
+notes, local play against Maia with Stockfish fallback, post-game review,
+`/dashboard` profile aggregation, `make demo`, and Playwright MVP coverage. See
+[docs/plans/001-mvp.md](docs/plans/001-mvp.md) for the updated slice map.

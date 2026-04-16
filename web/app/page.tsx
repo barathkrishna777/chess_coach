@@ -6,7 +6,7 @@ import Link from "next/link";
 import Board from "@/components/Board";
 import GameReview, { gameTitle } from "@/components/GameReview";
 import HealthIndicator from "@/components/HealthIndicator";
-import { analyzePgn } from "@/lib/api";
+import { analyzePgn, userFacingErrorMessage } from "@/lib/api";
 import type { AnnotatedGame } from "@/lib/types";
 
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -31,7 +31,7 @@ export default function Home() {
     try {
       setGame(await analyzePgn(pgn));
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(userFacingErrorMessage(caught));
     } finally {
       setIsAnalyzing(false);
     }
@@ -122,7 +122,11 @@ export default function Home() {
             ) : null}
           </div>
           {error ? (
-            <p className="mt-3 rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]">
+            <p
+              role="alert"
+              aria-live="polite"
+              className="mt-3 rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]"
+            >
               {error}
             </p>
           ) : null}

@@ -14,6 +14,7 @@ type BoardProps = {
   movableColor?: Color;
   legalDests?: Dests;
   disabled?: boolean;
+  testId?: string;
   onMove?: (from: Key, to: Key) => void;
 };
 
@@ -25,6 +26,7 @@ export default function Board({
   movableColor = "white",
   legalDests,
   disabled = false,
+  testId = "chess-board",
   onMove,
 }: BoardProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -139,6 +141,7 @@ export default function Board({
   return (
     <div
       ref={ref}
+      data-testid={testId}
       className="w-full aspect-square rounded-md overflow-hidden border border-[#1f2a24]"
     />
   );

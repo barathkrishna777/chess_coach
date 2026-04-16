@@ -1,0 +1,11 @@
+[Event "Demo Missed Tactic"]
+[Site "chess_ml"]
+[Date "2026.04.16"]
+[Round "-"]
+[White "Ada"]
+[Black "Turing"]
+[WhiteElo "1500"]
+[BlackElo "1520"]
+[Result "*"]
+
+1. e4 d5 2. exd5 Qxd5 3. Nc3 a6 4. Nf3 *

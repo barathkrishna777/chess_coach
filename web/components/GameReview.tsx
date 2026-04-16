@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Key, KeyPair } from "chessground/types";
 
 import Board from "@/components/Board";
-import { explainMove, getExplanationStatus } from "@/lib/api";
+import { explainMove, getExplanationStatus, userFacingErrorMessage } from "@/lib/api";
 import type {
   AnnotatedGame,
   AnnotatedMove,
@@ -78,7 +78,7 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
         ),
       });
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(userFacingErrorMessage(caught));
     } finally {
       setExplainingPly(null);
     }
@@ -95,7 +95,11 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
 
       <div className="flex flex-col gap-5">
         {error ? (
-          <p className="rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]">
+          <p
+            role="alert"
+            aria-live="polite"
+            className="rounded-md bg-[#ffe4df] px-3 py-2 text-sm text-[#912f28]"
+          >
             {error}
           </p>
         ) : null}
