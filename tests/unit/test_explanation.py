@@ -291,10 +291,41 @@ def test_fallback_explanation_uses_only_supplied_stockfish_and_motif_facts() -> 
     assert "Nxd5" in text
     assert "c3d5" in text
     assert "missed tactic" in text.lower()
-    assert "6.55 pawns" in text
+    assert "recorded loss is 6.55 pawns" in text
+    assert "Lesson:" in text
+    assert "Grounding:" not in text
     assert "queen" not in text.lower()
     assert "fork" not in text.lower()
     assert "a3" not in text
+
+
+def test_allowed_tactic_fallback_explains_the_actionable_check() -> None:
+    request = _request_for_ply(
+        """
+[Event "Fixture"]
+[Result "*"]
+
+1. e4 d5 2. exd5 Qxd5 3. Nc3 a6 4. Nxd5 *
+""",
+        6,
+        {
+            6: _spec(
+                before_cp=80,
+                after_cp=702,
+                best_before="d5d8",
+                best_after="c3d5",
+            ),
+        },
+    )
+    prompt = build_prompt(request)
+
+    text = build_fallback_explanation(request, prompt)
+
+    assert text.startswith("After a6 (a7a6), Stockfish says the key reply is Nxd5 (c3d5)")
+    assert "an opening allowed tactic" in text
+    assert "recorded loss is 6.22 pawns" in text
+    assert "Lesson: before making the move, check the opponent's best reply" in text
+    assert "Grounding:" not in text
 
 
 def test_explanation_status_endpoint_does_not_contact_provider(tmp_path: Path) -> None:

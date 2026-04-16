@@ -178,27 +178,14 @@ def build_fallback_explanation(request: ExplanationRequest, prompt: BuiltPrompt)
     best_move = _ground_truth_best_move(prompt)
     pv = _ground_truth_pv(prompt)
     line_source = prompt.facts["engine"]["line_source"]
-    line_label = "best reply after that move" if line_source == "after" else "best move there"
-    sentences = [f"Played {request.san} ({request.uci})."]
+    best_label = _move_label(best_move) if best_move is not None else None
+    pv_label = _line_label(pv)
+    sentences = [_fallback_intro(request, primary, best_label, line_source)]
 
-    if best_move is not None:
-        best_label = _move_label(best_move)
-        pv_label = _line_label(pv)
-        if pv_label:
-            sentences.append(f"Stockfish's {line_label} was {best_label}, with PV {pv_label}.")
-        else:
-            sentences.append(f"Stockfish's {line_label} was {best_label}.")
-    elif pv:
-        sentences.append(f"Stockfish's supplied PV was {_line_label(pv)}.")
-
-    details = [
-        f"{_phase_label(primary.evidence.phase)} {primary.label.lower()}",
-        _loss_label(request.loss_cp),
-        _motif_evidence_label(primary),
-    ]
-    detail_text = "; ".join(detail for detail in details if detail)
-    if detail_text:
-        sentences.append(f"Grounding: {detail_text}.")
+    proof = _fallback_proof_sentence(pv_label, request.loss_cp)
+    if proof:
+        sentences.append(proof)
+    sentences.append(_fallback_lesson(primary))
 
     return " ".join(sentences)
 
@@ -388,12 +375,72 @@ def _line_label(pv: list[dict[str, str]]) -> str:
     return " ".join(_move_label(move) for move in pv[:4])
 
 
+def _fallback_intro(
+    request: ExplanationRequest,
+    motif: Motif,
+    best_label: str | None,
+    line_source: object,
+) -> str:
+    move_label = f"{request.san} ({request.uci})"
+    motif_label = motif.label.lower()
+    phase = _phase_label(motif.evidence.phase)
+    article = _article_for(phase)
+    if best_label is None:
+        return f"{move_label} is tagged as {article} {phase} {motif_label}."
+    if line_source == "after":
+        return (
+            f"After {move_label}, Stockfish says the key reply is {best_label}, "
+            f"so this is {article} {phase} {motif_label}."
+        )
+    return (
+        f"Instead of {move_label}, Stockfish wanted {best_label}, "
+        f"which is why this is tagged as {article} {phase} {motif_label}."
+    )
+
+
+def _fallback_proof_sentence(pv_label: str, loss_cp: int | None) -> str | None:
+    loss = _loss_label(loss_cp)
+    if pv_label and loss:
+        return f"The supplied PV starts {pv_label}, and the recorded loss is {loss}."
+    if pv_label:
+        return f"The supplied PV starts {pv_label}."
+    if loss:
+        return f"The recorded loss is {loss}."
+    return None
+
+
+def _fallback_lesson(motif: Motif) -> str:
+    evidence = motif.evidence
+    if motif.id == "allowed_tactic":
+        reply = (
+            f" like {evidence.opponent_reply.san} ({evidence.opponent_reply.uci})"
+            if evidence.opponent_reply is not None
+            else ""
+        )
+        return f"Lesson: before making the move, check the opponent's best reply{reply}."
+    if motif.id in {"missed_tactic", "endgame_slip"}:
+        if evidence.best_move is not None:
+            best = f"{evidence.best_move.san} ({evidence.best_move.uci})"
+            return f"Lesson: compare your candidate with Stockfish's concrete move {best}."
+        return "Lesson: compare your candidate with the concrete Stockfish line."
+    if motif.id == "hanging_piece" and evidence.piece is not None:
+        piece = evidence.piece
+        return f"Lesson: count attacks and defenders on the {piece.role} on {piece.square}."
+    if motif.id == "opening_inaccuracy":
+        return "Lesson: save this engine line as the concrete opening improvement to review."
+    return "Lesson: use the Stockfish line as the concrete correction for this position."
+
+
 def _phase_label(phase: str) -> str:
     if phase == "opening":
-        return "opening-phase"
+        return "opening"
     if phase == "middlegame":
         return "middlegame"
     return "endgame"
+
+
+def _article_for(text: str) -> str:
+    return "an" if text[:1].lower() in {"a", "e", "i", "o", "u"} else "a"
 
 
 def _loss_label(loss_cp: int | None) -> str | None:
@@ -401,24 +448,7 @@ def _loss_label(loss_cp: int | None) -> str | None:
         return None
     if loss_cp == 0:
         return "no recorded centipawn loss"
-    return f"recorded loss {loss_cp / 100:.2f} pawns"
-
-
-def _motif_evidence_label(motif: Motif) -> str:
-    evidence = motif.evidence
-    if evidence.piece is not None:
-        piece = evidence.piece
-        parts = [f"{piece.color} {piece.role} on {piece.square}"]
-        if evidence.attackers:
-            parts.append(f"attackers {', '.join(evidence.attackers)}")
-        if evidence.defenders:
-            parts.append(f"defenders {', '.join(evidence.defenders)}")
-        return "; ".join(parts)
-    if evidence.opponent_reply is not None:
-        return f"opponent reply {evidence.opponent_reply.san} ({evidence.opponent_reply.uci})"
-    if evidence.best_move is not None:
-        return f"motif best move {evidence.best_move.san} ({evidence.best_move.uci})"
-    return ""
+    return f"{loss_cp / 100:.2f} pawns"
 
 
 def _trim_to_sentence_limit(text: str, *, max_sentences: int) -> str:
