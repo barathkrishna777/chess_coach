@@ -20,7 +20,7 @@ DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6"
 DEFAULT_CODEX_MODEL = "Codex-opus-4-6"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
-DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_TIMEOUT_SECONDS = 45.0
 SelectionReason: TypeAlias = Literal["disabled", "api_key_missing", "unknown_provider"]
 
 

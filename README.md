@@ -72,7 +72,8 @@ Configuration:
 
 - `CHESS_ML_EXPLANATION_PROVIDER`: `auto`, `ollama`, `anthropic`, `codex`, or
   `disabled`. Default `auto` uses local Ollama.
-- `CHESS_ML_EXPLANATION_TIMEOUT_SECONDS`: provider timeout budget. Default `15`.
+- `CHESS_ML_EXPLANATION_TIMEOUT_SECONDS`: provider timeout budget. Default `45`, which
+  gives local Ollama enough room for a cold model load plus one short JSON response.
 - `CHESS_ML_OLLAMA_BASE_URL`: local Ollama base URL. Default `http://localhost:11434`.
 - `CHESS_ML_OLLAMA_MODEL`: local model name. Default `qwen3:8b`.
 - `CHESS_ML_DB_PATH`: SQLite path for the explanation cache and local profile store. Default

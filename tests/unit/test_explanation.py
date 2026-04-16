@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import chess
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,9 +20,11 @@ from chess_ml.classifier.motifs import AnalyzedMove
 from chess_ml.engine.stockfish import CentipawnScore, EngineEvaluation, EngineMove, MateScore
 from chess_ml.explanation.cache import ExplanationCache, cache_key_for_facts
 from chess_ml.explanation.client import (
+    DEFAULT_TIMEOUT_SECONDS,
     ClientResponse,
     LocalProviderUnavailableError,
     client_from_env,
+    select_client_from_env,
 )
 from chess_ml.explanation.models import (
     ExplanationProvider,
@@ -262,6 +265,18 @@ def test_explanation_status_endpoint_does_not_contact_provider(tmp_path: Path) -
         "reason": None,
     }
     assert client.calls == 0
+
+
+def test_default_explanation_timeout_allows_local_ollama_cold_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHESS_ML_EXPLANATION_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("CHESS_ML_EXPLANATION_PROVIDER", "ollama")
+
+    selection = select_client_from_env()
+
+    assert DEFAULT_TIMEOUT_SECONDS == 45.0
+    assert selection.timeout_seconds == 45.0
 
 
 def test_api_move_model_includes_nullable_explanation() -> None:
