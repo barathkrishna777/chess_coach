@@ -12,7 +12,7 @@ See [CLAUDE.md](CLAUDE.md) for project conventions and [docs/plans/001-mvp.md](d
 - Stockfish: `brew install stockfish`
 - Optional Maia play opponent: `brew install lc0`
 - Optional local explanations: [Ollama](https://ollama.com), then
-  `ollama pull qwen3:8b`
+  `ollama pull gemma3n:e2b`
 
 ## Setup
 
@@ -93,14 +93,14 @@ Configuration:
 - `CHESS_ML_EXPLANATION_TIMEOUT_SECONDS`: provider timeout budget. Default `45`, which
   gives local Ollama enough room for a cold model load plus one short JSON response.
 - `CHESS_ML_OLLAMA_BASE_URL`: local Ollama base URL. Default `http://localhost:11434`.
-- `CHESS_ML_OLLAMA_MODEL`: local model name. Default `qwen3:8b`.
+- `CHESS_ML_OLLAMA_MODEL`: local model name. Default `gemma3n:e2b`.
 - `CHESS_ML_DB_PATH`: SQLite path for the explanation cache and local profile store. Default
   `data/chess_ml.sqlite3`.
 
 For local explanations:
 
 ```bash
-ollama pull qwen3:8b
+ollama pull gemma3n:e2b
 ollama serve
 ```
 

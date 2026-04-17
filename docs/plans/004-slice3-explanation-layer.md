@@ -150,7 +150,7 @@ Concrete provider selection comes from env:
 - `CHESS_ML_EXPLANATION_PROVIDER=auto|ollama|anthropic|codex|disabled`.
 - Default `auto` uses local Ollama, not a hosted API key.
 - Ollama defaults: `CHESS_ML_OLLAMA_BASE_URL=http://localhost:11434` and
-  `CHESS_ML_OLLAMA_MODEL=qwen3:8b`.
+  `CHESS_ML_OLLAMA_MODEL=gemma3n:e2b`.
 - Hosted adapters remain opt-in: `ANTHROPIC_API_KEY` for Anthropic and
   `CODEX_API_KEY`/`OPENAI_API_KEY` for the Codex/OpenAI-compatible path.
 - Load `.env` locally so the documented gitignored key workflow actually works.
@@ -166,7 +166,7 @@ on-demand endpoint returns:
   "text": null,
   "source": null,
   "provider": "ollama",
-  "model": "qwen3:8b",
+  "model": "gemma3n:e2b",
   "prompt_version": "grounded-coach.v1",
   "reason": "local_model_unavailable"
 }
