@@ -215,7 +215,7 @@ async def opponents(request: Request) -> PlayOpponentStatusModel:
         default_maia_rating=DEFAULT_MAIA_RATING,
         stockfish_path="",
         stockfish_available=opponent is not None,
-        stockfish_label="Stockfish fallback",
+        stockfish_label="Practice bot",
         maia=MaiaOpponentStatusModel(
             lc0_path=None,
             lc0_available=False,
@@ -452,7 +452,7 @@ async def _select_opponent(
         info=OpponentInfo(
             kind="stockfish",
             requested="stockfish" if requested == "stockfish" else requested,
-            label="Stockfish fallback",
+            label="Practice bot",
             engine="Stockfish",
             maia_rating=None,
             fallback_reason=None,

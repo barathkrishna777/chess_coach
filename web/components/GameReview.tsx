@@ -26,6 +26,7 @@ import type {
 type GameReviewProps = {
   game: AnnotatedGame;
   onGameChange: (game: AnnotatedGame) => void;
+  orientation?: "white" | "black";
 };
 
 type TryResult = "correct" | "incorrect";
@@ -36,7 +37,11 @@ type MovePair = {
   black: MoveListEntry | null;
 };
 
-export default function GameReview({ game, onGameChange }: GameReviewProps) {
+export default function GameReview({
+  game,
+  onGameChange,
+  orientation,
+}: GameReviewProps) {
   const [selectedIndex, setSelectedIndex] = useState(game.moves.length > 0 ? 0 : -1);
   const [explainingPly, setExplainingPly] = useState<number | null>(null);
   const [coachStatus, setCoachStatus] = useState<ExplanationStatus | null>(null);
@@ -50,6 +55,7 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
   const [tryResult, setTryResult] = useState<TryResult | null>(null);
 
   const pvMode = pvStep !== null;
+  const boardOrientation = orientation ?? inferredReviewOrientation(game);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,6 +248,7 @@ export default function GameReview({ game, onGameChange }: GameReviewProps) {
             <Board
               fen={boardFen}
               lastMove={boardLastMove}
+              orientation={boardOrientation}
               onMove={boardOnMove}
               legalDests={boardLegalDests}
               turnColor={boardTurnColor ?? "white"}
@@ -1042,6 +1049,10 @@ export function gameTitle(game: AnnotatedGame | null): string {
 function playerName(player: { name: string | null; elo: number | null }): string {
   const name = player.name?.trim() || "Unknown";
   return player.elo ? `${name} (${player.elo})` : name;
+}
+
+function inferredReviewOrientation(game: AnnotatedGame): "white" | "black" {
+  return game.players.black.name?.trim().toLowerCase() === "you" ? "black" : "white";
 }
 
 function actualLineFromSelection(

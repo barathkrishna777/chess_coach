@@ -105,7 +105,16 @@ def test_prompt_uses_after_line_for_allowed_tactic() -> None:
     assert prompt.primary_motif_id == "allowed_tactic"
     assert prompt.expected_move_uci == "c3d5"
     assert prompt.facts["engine"]["line_source"] == "after"
+    assert prompt.facts["engine"]["best_move_side"] == "white"
+    assert prompt.facts["engine"]["best_move_role"] == "opponent_reply_after_player_move"
     assert prompt.facts["engine"]["ground_truth_best_move"] == {"uci": "c3d5", "san": "Nxd5"}
+    assert prompt.facts["engine"]["ground_truth_main_line"][0] == {
+        "move_number": 4,
+        "side": "white",
+        "san": "Nxd5",
+        "uci": "c3d5",
+    }
+    assert "opponent's reply after the player's move" in prompt.user_prompt
 
 
 @pytest.mark.parametrize("motif_id", LABEL_ORDER)
@@ -221,6 +230,27 @@ def test_validation_rejects_user_facing_pv_wording() -> None:
             '{"text":"Stockfish wanted Nxd5 from c3 in the PV. Check forcing captures first.","referenced_move_uci":"c3d5"}',
             prompt,
         )
+
+
+def test_validation_rejects_opponent_reply_described_as_users_move() -> None:
+    prompt = build_prompt(_allowed_tactic_request())
+
+    with pytest.raises(InvalidExplanationResponseError):
+        validate_provider_response(
+            '{"text":"Your best move was Nxd5, so you should have played it instead. Check forcing moves first.","referenced_move_uci":"c3d5"}',
+            prompt,
+        )
+
+
+def test_validation_accepts_opponent_reply_described_as_opponents_move() -> None:
+    prompt = build_prompt(_allowed_tactic_request())
+
+    validated = validate_provider_response(
+        '{"text":"After a6, White had the reply Nxd5 in the supplied main line. Before playing a quiet move, check the opponent\\u0027s forcing reply.","referenced_move_uci":"c3d5"}',
+        prompt,
+    )
+
+    assert "White had the reply Nxd5" in validated.text
 
 
 def test_missing_api_key_returns_unavailable(tmp_path: Path) -> None:
@@ -490,6 +520,26 @@ def _missed_tactic_request() -> ExplanationRequest:
         7,
         {
             7: _spec(before_cp=740, after_cp=85, best_before="c3d5"),
+        },
+    )
+
+
+def _allowed_tactic_request() -> ExplanationRequest:
+    return _request_for_ply(
+        """
+[Event "Fixture"]
+[Result "*"]
+
+1. e4 d5 2. exd5 Qxd5 3. Nc3 a6 4. Nxd5 *
+""",
+        6,
+        {
+            6: _spec(
+                before_cp=80,
+                after_cp=702,
+                best_before="d5d8",
+                best_after="c3d5",
+            ),
         },
     )
 

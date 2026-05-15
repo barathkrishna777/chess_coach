@@ -98,12 +98,17 @@ test("starts a personal drill from the dashboard and reveals feedback after a mo
   await expect(page.getByTestId("revealed-best-move")).toBeVisible();
 });
 
-test("play starts with Stockfish fallback, resigns, and opens review", async ({ page }) => {
+test("play starts with the practice bot, resigns, and opens review", async ({ page }) => {
   await page.goto("/play");
 
+  await expect(page.getByRole("button", { name: "Random" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.getByRole("button", { name: "White" }).click();
   await page.getByRole("button", { name: "Start game" }).click();
-  await expect(page.getByText("Stockfish fallback (1350 Elo)")).toBeVisible();
-  await expect(page.getByText(/Maia was not available/)).toBeVisible();
+  await expect(page.getByText("Practice bot (1350)")).toBeVisible();
+  await expect(page.getByText(/human-like opponent is not set up/)).toBeVisible();
 
   await dragPiece(page, page.getByTestId("chess-board"), "e2", "e4");
   await expect(page.getByText("e4")).toBeVisible();
@@ -140,6 +145,7 @@ test("play accepts click movement without regressing board interaction", async (
   });
 
   await page.goto("/play");
+  await page.getByRole("button", { name: "White" }).click();
   await page.getByRole("button", { name: "Start game" }).click();
   await expect(page.getByText("White to move")).toBeVisible();
   await movePiece(page, page.getByTestId("chess-board"), "e2", "e4");
@@ -184,6 +190,7 @@ test("promotion uses an in-board dialog instead of a browser prompt", async ({ p
   });
 
   await page.goto("/play");
+  await page.getByRole("button", { name: "White" }).click();
   await page.getByRole("button", { name: "Start game" }).click();
   await expect(page.getByText("White to move")).toBeVisible();
   await movePiece(page, page.getByTestId("chess-board"), "a7", "a8");
@@ -244,7 +251,7 @@ test("play as black flips the board and starts with a bot move", async ({ page }
   });
 
   await page.goto("/play");
-  await page.getByLabel("Play as").selectOption("black");
+  await page.getByRole("button", { name: "Black" }).click();
   await page.getByRole("button", { name: "Start game" }).click();
 
   await expect.poll(() => requestedColor).toBe("black");
@@ -278,6 +285,7 @@ test("takeback undoes the latest user and bot move once", async ({ page }) => {
   });
 
   await page.goto("/play");
+  await page.getByRole("button", { name: "White" }).click();
   await page.getByRole("button", { name: "Start game" }).click();
   await expect(page.getByText("White to move")).toBeVisible();
   await movePiece(page, page.getByTestId("chess-board"), "e2", "e4");
@@ -309,6 +317,7 @@ test("hint shows the best move on the board panel", async ({ page }) => {
   );
 
   await page.goto("/play");
+  await page.getByRole("button", { name: "White" }).click();
   await page.getByRole("button", { name: "Start game" }).click();
   await page.getByRole("button", { name: "Hint (3)" }).click();
 
@@ -430,7 +439,7 @@ async function mockPlayOpponents(page: Page): Promise<void> {
       default_maia_rating: 1500,
       stockfish_path: "/opt/homebrew/bin/stockfish",
       stockfish_available: true,
-      stockfish_label: "Stockfish fallback",
+      stockfish_label: "Practice bot",
       maia: {
         lc0_path: null,
         lc0_available: false,
@@ -458,7 +467,7 @@ function playState(overrides: Partial<MockPlayState> = {}): MockPlayState {
     opponent: {
       kind: "stockfish",
       requested: "stockfish",
-      label: "Stockfish fallback",
+      label: "Practice bot",
       engine: "Stockfish",
       maia_rating: null,
       fallback_reason: null,

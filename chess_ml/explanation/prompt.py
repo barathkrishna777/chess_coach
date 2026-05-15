@@ -17,6 +17,7 @@ from chess_ml.explanation.models import PROMPT_VERSION, ExplanationRequest
 SYSTEM_PROMPT = """You are a chess coach explaining one mistake to a 1200-2000 rated club player.
 Stockfish is ground truth: never contradict the provided engine best move or main line.
 Use only the supplied FEN, played move, actual game line, Stockfish line, eval swing, and motif evidence; do not invent tactics.
+Respect whose turn it is in the supplied line. If the Stockfish line starts after the played move, its best move is the opponent's reply, not the player's move.
 Compare what the player did with what Stockfish recommended, then explain what changed.
 Reference concrete pieces, squares, or moves from those two supplied lines.
 Teach exactly one practical lesson; only discuss deeper positional ideas when the concrete lines do not already explain the mistake.
@@ -118,10 +119,22 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
     primary = primary_motif(request.motifs)
     line_source = _line_source(primary, request)
     line_analysis = request.analysis_after if line_source == "after" else request.analysis_before
+    line_fen = request.fen_after if line_source == "after" else request.fen_before
+    best_move_side = _side_to_move(line_fen)
+    best_move_role = (
+        "opponent_reply_after_player_move"
+        if line_source == "after" and best_move_side != request.side
+        else "player_correction_before_move"
+    )
     expected_move = line_analysis.best_move
     facts = {
         "prompt_version": PROMPT_VERSION,
         "task": "Explain exactly one chess mistake.",
+        "player": {
+            "side": request.side,
+            "played_move_san": request.san,
+            "played_move_uci": request.uci,
+        },
         "move": {
             "ply": request.ply,
             "move_number": request.move_number,
@@ -144,8 +157,16 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
         },
         "engine": {
             "line_source": line_source,
+            "line_source_meaning": (
+                "Stockfish line starts before the player move; the best move is the player's correction."
+                if line_source == "before"
+                else "Stockfish line starts after the player move; the best move is the opponent's reply."
+            ),
+            "best_move_side": best_move_side,
+            "best_move_role": best_move_role,
             "ground_truth_best_move": _move_payload(expected_move),
             "ground_truth_pv": [_move_payload(move) for move in line_analysis.pv],
+            "ground_truth_main_line": _line_payload(line_fen, line_analysis.pv),
             "before": _analysis_payload(request.analysis_before),
             "after": _analysis_payload(request.analysis_after),
             "loss_cp": request.loss_cp,
@@ -164,12 +185,22 @@ def build_prompt(request: ExplanationRequest) -> BuiltPrompt:
             "required_content": (
                 "Compare the played move or actual line with Stockfish's best move or main line."
             ),
+            "side_ownership_rules": (
+                "If engine.best_move_role is player_correction_before_move, the best move belongs to the player.",
+                "If engine.best_move_role is opponent_reply_after_player_move, the best move belongs to the opponent; never phrase it as the player's top move.",
+                "Use engine.ground_truth_main_line side labels when describing who moves next.",
+            ),
         },
     }
     user_prompt = (
         "Use these engine-grounded facts to write one short coaching explanation.\n"
         "Your job is comparison, not discovery: contrast move.san and actual_line with "
         "engine.ground_truth_best_move and engine.ground_truth_pv.\n"
+        "Respect side ownership exactly: if engine.best_move_role is "
+        "opponent_reply_after_player_move, describe engine.ground_truth_best_move as the "
+        "opponent's reply after the player's move, never as what the player should have "
+        "played. If engine.best_move_role is player_correction_before_move, describe it "
+        "as the player's missed or better move.\n"
         "Do not mention any move as best unless it is the ground_truth_best_move or in "
         "ground_truth_pv. The field name ground_truth_pv is internal; in the explanation "
         'text, call it the "main line" and do not write "PV" or "principal variation".\n\n'
@@ -241,6 +272,10 @@ def validate_provider_response(raw_text: str, prompt: BuiltPrompt) -> ValidatedE
         raise InvalidExplanationResponseError("Explanation referenced a non-engine move.")
     if _claims_different_engine_move(text, prompt):
         raise InvalidExplanationResponseError("Explanation claimed a different engine move.")
+    if _misstates_opponent_reply_as_player_move(text, prompt):
+        raise InvalidExplanationResponseError(
+            "Explanation treated an opponent reply as player advice."
+        )
     text = _trim_to_sentence_limit(text, max_sentences=3)
     text = _trim_to_word_limit(text, max_words=OUTPUT_MAX_WORDS)
 
@@ -287,6 +322,34 @@ def _move_payload(move: EngineMove | None) -> dict[str, str] | None:
     if move is None:
         return None
     return {"uci": move.uci, "san": move.san}
+
+
+def _line_payload(fen: str, pv: tuple[EngineMove, ...]) -> list[dict[str, object]]:
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return []
+
+    payload: list[dict[str, object]] = []
+    for move_ref in pv:
+        side = _side_label(board.turn)
+        move_number = board.fullmove_number
+        payload.append(
+            {
+                "move_number": move_number,
+                "side": side,
+                "uci": move_ref.uci,
+                "san": move_ref.san,
+            }
+        )
+        try:
+            move = chess.Move.from_uci(move_ref.uci)
+        except ValueError:
+            break
+        if move not in board.legal_moves:
+            break
+        board.push(move)
+    return payload
 
 
 def _motif_payload(motif: Motif) -> dict[str, Any]:
@@ -387,6 +450,32 @@ def _claims_different_engine_move(text: str, prompt: BuiltPrompt) -> bool:
         if not any(re.search(pattern, lowered) for pattern in claim_patterns):
             continue
         if _text_contains_any_ref(sentence, disallowed_refs):
+            return True
+    return False
+
+
+def _misstates_opponent_reply_as_player_move(text: str, prompt: BuiltPrompt) -> bool:
+    engine = prompt.facts["engine"]
+    if engine.get("best_move_role") != "opponent_reply_after_player_move":
+        return False
+
+    best_move = _ground_truth_best_move(prompt)
+    if best_move is None:
+        return False
+
+    bad_player_advice_patterns = (
+        r"\byou\s+(?:should|needed|need|had|have)\s+(?:to\s+)?(?:play|played|choose|chosen|make|made)\b",
+        r"\bstockfish\s+(?:wanted|recommended)\s+you\s+to\s+(?:play|choose|make)\b",
+        r"\byour\s+(?:best|top)\s+move\b",
+        r"\bbest\s+move\s+for\s+you\b",
+    )
+    sentences = [fragment for fragment in re.split(r"(?<=[.!?])\s+", text) if fragment.strip()]
+    refs = _refs_for_move(best_move)
+    for sentence in sentences:
+        if not _text_contains_any_ref(sentence, refs):
+            continue
+        lowered = sentence.lower()
+        if any(re.search(pattern, lowered) for pattern in bad_player_advice_patterns):
             return True
     return False
 
@@ -613,6 +702,17 @@ def _loss_label(loss_cp: int | None) -> str | None:
     if loss_cp == 0:
         return "no recorded centipawn loss"
     return f"{loss_cp / 100:.2f} pawns"
+
+
+def _side_to_move(fen: str) -> str:
+    try:
+        return _side_label(chess.Board(fen).turn)
+    except ValueError:
+        return "white" if " w " in f" {fen} " else "black"
+
+
+def _side_label(turn: bool) -> str:
+    return "white" if turn == chess.WHITE else "black"
 
 
 def _trim_to_sentence_limit(text: str, *, max_sentences: int) -> str:

@@ -41,6 +41,8 @@ type PendingPromotion = {
   options: PromotionChoice[];
 };
 
+type PlayColorChoice = PlayColor | "random";
+
 const PROMOTION_LABELS: Record<PromotionChoice, string> = {
   q: "Queen",
   r: "Rook",
@@ -59,7 +61,7 @@ export default function PlayPage() {
   const [opponentStatus, setOpponentStatus] = useState<PlayOpponentsStatus | null>(null);
   const [selectedOpponent, setSelectedOpponent] = useState<PlayOpponentRequest>("auto");
   const [selectedMaiaRating, setSelectedMaiaRating] = useState<MaiaRating>(1500);
-  const [selectedUserColor, setSelectedUserColor] = useState<PlayColor>("white");
+  const [selectedColorChoice, setSelectedColorChoice] = useState<PlayColorChoice>("random");
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
   const [hint, setHint] = useState<PlayHint | null>(null);
   const [boardResetNonce, setBoardResetNonce] = useState(0);
@@ -102,7 +104,8 @@ export default function PlayPage() {
     : null;
   const hasUserMove =
     playState?.moves.some((move) => move.side === playState.user_color) ?? false;
-  const activeUserColor = playState?.user_color ?? selectedUserColor;
+  const setupBoardColor = colorChoiceToBoardColor(selectedColorChoice);
+  const activeUserColor = playState?.user_color ?? setupBoardColor;
   const canMove =
     Boolean(playState) &&
     playState?.status === "active" &&
@@ -173,10 +176,11 @@ export default function PlayPage() {
     setHint(null);
     setBoardResetNonce((value) => value + 1);
     try {
+      const userColor = resolveUserColor(selectedColorChoice);
       const nextState = await startPlayGame({
         opponent: selectedOpponent,
         maiaRating: selectedMaiaRating,
-        userColor: selectedUserColor,
+        userColor,
       });
       setPlayState(nextState);
       setViewedPly(nextState.moves.length);
@@ -328,8 +332,8 @@ export default function PlayPage() {
               Play, then review
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#4a5a54]">
-              Play either side against Maia when local setup is ready, then go
-              straight into Stockfish-grounded review.
+              Choose a side, play a local opponent, then go straight into
+              Stockfish-grounded review.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -355,7 +359,7 @@ export default function PlayPage() {
               <div>
                 <p className="text-sm font-semibold text-[#17201d]">Post-game review</p>
                 <p className="mt-1 text-sm text-[#4a5a54]">
-                  Start another game with the same opponent, rating, and color.
+                  Start another game with the same setup.
                 </p>
               </div>
               <button
@@ -376,7 +380,11 @@ export default function PlayPage() {
                 {error}
               </p>
             ) : null}
-            <GameReview game={reviewGame} onGameChange={setReviewGame} />
+            <GameReview
+              game={reviewGame}
+              onGameChange={setReviewGame}
+              orientation={playState?.user_color ?? setupBoardColor}
+            />
           </section>
         ) : (
           <section className="grid gap-6 lg:grid-cols-[minmax(360px,560px)_minmax(320px,1fr)] lg:items-start">
@@ -384,7 +392,7 @@ export default function PlayPage() {
               <Board
                 key={`${playState?.game_id ?? "start"}-${boardResetNonce}`}
                 fen={boardFen}
-                orientation={playState?.orientation ?? selectedUserColor}
+                orientation={playState?.orientation ?? setupBoardColor}
                 turnColor={activeUserColor}
                 movableColor={activeUserColor}
                 lastMove={lastMove}
@@ -396,7 +404,7 @@ export default function PlayPage() {
               {pendingPromotion ? (
                 <PromotionDialog
                   pending={pendingPromotion}
-                  orientation={playState?.orientation ?? selectedUserColor}
+                  orientation={playState?.orientation ?? setupBoardColor}
                   onSelect={(choice) => void submitPromotion(choice)}
                   onCancel={cancelPromotion}
                 />
@@ -406,23 +414,37 @@ export default function PlayPage() {
             <div className="flex flex-col gap-5">
               <section className="rounded-md border border-[#d5ddd8] bg-white p-4">
                 <div className="flex flex-wrap items-center gap-3">
-                  <label className="grid gap-1 text-sm">
+                  <div className="grid w-full gap-2 text-sm">
                     <span className="font-semibold text-[#17201d]">Opponent</span>
-                    <select
-                      value={selectedOpponent}
-                      disabled={Boolean(playState?.status === "active") || isStarting}
-                      onChange={(event) =>
-                        setSelectedOpponent(event.target.value as PlayOpponentRequest)
-                      }
-                      className="rounded-md border border-[#ccd6d1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#37786f] focus:ring-2 focus:ring-[#cce8df]"
-                    >
-                      <option value="auto">Auto: Maia with fallback</option>
-                      <option value="maia">Maia only</option>
-                      <option value="stockfish">Stockfish fallback</option>
-                    </select>
-                  </label>
+                    <div className="grid gap-2 md:grid-cols-3">
+                      <OpponentButton
+                        value="auto"
+                        selected={selectedOpponent === "auto"}
+                        disabled={Boolean(playState?.status === "active") || isStarting}
+                        title="Best available"
+                        description="Human-like when ready, practice bot otherwise."
+                        onSelect={setSelectedOpponent}
+                      />
+                      <OpponentButton
+                        value="maia"
+                        selected={selectedOpponent === "maia"}
+                        disabled={Boolean(playState?.status === "active") || isStarting}
+                        title="Club player"
+                        description="Human-like play at the level you choose."
+                        onSelect={setSelectedOpponent}
+                      />
+                      <OpponentButton
+                        value="stockfish"
+                        selected={selectedOpponent === "stockfish"}
+                        disabled={Boolean(playState?.status === "active") || isStarting}
+                        title="Practice bot"
+                        description="Fast local opponent for quick games."
+                        onSelect={setSelectedOpponent}
+                      />
+                    </div>
+                  </div>
                   <label className="grid gap-1 text-sm">
-                    <span className="font-semibold text-[#17201d]">Maia rating</span>
+                    <span className="font-semibold text-[#17201d]">Club level</span>
                     <select
                       value={selectedMaiaRating}
                       disabled={
@@ -440,18 +462,35 @@ export default function PlayPage() {
                       <option value={1900}>1900</option>
                     </select>
                   </label>
-                  <label className="grid gap-1 text-sm">
+                  <div className="grid gap-1 text-sm">
                     <span className="font-semibold text-[#17201d]">Play as</span>
-                    <select
-                      value={selectedUserColor}
-                      disabled={Boolean(playState?.status === "active") || isStarting}
-                      onChange={(event) => setSelectedUserColor(event.target.value as PlayColor)}
-                      className="rounded-md border border-[#ccd6d1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#37786f] focus:ring-2 focus:ring-[#cce8df]"
-                    >
-                      <option value="white">White</option>
-                      <option value="black">Black</option>
-                    </select>
-                  </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <ColorButton
+                        value="white"
+                        selected={selectedColorChoice === "white"}
+                        disabled={Boolean(playState?.status === "active") || isStarting}
+                        onSelect={setSelectedColorChoice}
+                      >
+                        White
+                      </ColorButton>
+                      <ColorButton
+                        value="random"
+                        selected={selectedColorChoice === "random"}
+                        disabled={Boolean(playState?.status === "active") || isStarting}
+                        onSelect={setSelectedColorChoice}
+                      >
+                        Random
+                      </ColorButton>
+                      <ColorButton
+                        value="black"
+                        selected={selectedColorChoice === "black"}
+                        disabled={Boolean(playState?.status === "active") || isStarting}
+                        onSelect={setSelectedColorChoice}
+                      >
+                        Black
+                      </ColorButton>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => void startGame()}
@@ -496,12 +535,26 @@ export default function PlayPage() {
                   <InfoRow label="Status" value={statusLabel(playState)} />
                   <InfoRow
                     label="Opponent"
-                    value={playState?.opponent.label ?? opponentSetupLabel(opponentStatus)}
+                    value={
+                      playState?.opponent.label ??
+                      opponentSetupLabel(opponentStatus, selectedOpponent)
+                    }
                   />
-                  <InfoRow label="Color" value={colorLabel(activeUserColor)} />
+                  <InfoRow
+                    label="Color"
+                    value={
+                      playState
+                        ? colorLabel(activeUserColor)
+                        : colorChoiceLabel(selectedColorChoice)
+                    }
+                  />
                   <InfoRow
                     label="Setup"
-                    value={opponentSetupDetail(opponentStatus, selectedMaiaRating)}
+                    value={opponentSetupDetail(
+                      opponentStatus,
+                      selectedMaiaRating,
+                      selectedOpponent,
+                    )}
                   />
                   <InfoRow
                     label="Turn"
@@ -537,8 +590,8 @@ export default function PlayPage() {
 
                 {playState?.opponent.fallback_reason ? (
                   <p className="mt-4 rounded-md bg-[#fff2bf] px-3 py-2 text-sm text-[#6f4b00]">
-                    Maia was not available, so this game started with Stockfish fallback:{" "}
-                    {playState.opponent.fallback_reason}
+                    The human-like opponent is not set up locally yet, so this game used
+                    the practice bot.
                   </p>
                 ) : null}
 
@@ -584,6 +637,69 @@ export default function PlayPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function OpponentButton({
+  value,
+  selected,
+  disabled,
+  title,
+  description,
+  onSelect,
+}: {
+  value: PlayOpponentRequest;
+  selected: boolean;
+  disabled: boolean;
+  title: string;
+  description: string;
+  onSelect: (value: PlayOpponentRequest) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(value)}
+      disabled={disabled}
+      aria-pressed={selected}
+      className={`rounded-md border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+        selected
+          ? "border-[#37786f] bg-[#edf4f1] text-[#17201d]"
+          : "border-[#ccd6d1] bg-white hover:bg-[#f0f5f2]"
+      }`}
+    >
+      <span className="block text-sm font-semibold">{title}</span>
+      <span className="mt-1 block text-xs leading-5 text-[#65766f]">{description}</span>
+    </button>
+  );
+}
+
+function ColorButton({
+  value,
+  selected,
+  disabled,
+  onSelect,
+  children,
+}: {
+  value: PlayColorChoice;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: (value: PlayColorChoice) => void;
+  children: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(value)}
+      disabled={disabled}
+      aria-pressed={selected}
+      className={`rounded-md border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+        selected
+          ? "border-[#37786f] bg-[#37786f] text-white"
+          : "border-[#ccd6d1] bg-white text-[#2c625a] hover:bg-[#edf4f1]"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -691,10 +807,15 @@ function boardPositionLabel(
   return `After ${prefix} ${move.san}`;
 }
 
-function opponentSetupLabel(status: PlayOpponentsStatus | null): string {
+function opponentSetupLabel(
+  status: PlayOpponentsStatus | null,
+  selectedOpponent: PlayOpponentRequest,
+): string {
   if (!status) return "Checking local opponents";
+  if (selectedOpponent === "maia") return "Club player";
+  if (selectedOpponent === "stockfish") return status.stockfish_label || "Practice bot";
   if (status.maia.lc0_available && status.maia.available_ratings.length > 0) {
-    return "Maia, with Stockfish fallback";
+    return "Club player";
   }
   if (status.stockfish_available) return status.stockfish_label;
   return "No local opponent ready";
@@ -703,18 +824,26 @@ function opponentSetupLabel(status: PlayOpponentsStatus | null): string {
 function opponentSetupDetail(
   status: PlayOpponentsStatus | null,
   selectedRating: MaiaRating,
+  selectedOpponent: PlayOpponentRequest,
 ): string {
   if (!status) return "Loading setup status";
   if (!status.stockfish_available && !status.maia.lc0_available) {
-    return "Install Stockfish or Lc0 to play locally";
+    return "Install a local opponent to start a game";
+  }
+  if (selectedOpponent === "stockfish") {
+    return status.stockfish_available ? "Practice bot is ready" : "Install the practice bot to play";
   }
   if (!status.maia.lc0_available) {
-    return "Lc0 missing; auto mode will use Stockfish";
+    return selectedOpponent === "maia"
+      ? "Human-like opponent is not set up locally"
+      : "Practice bot is ready";
   }
   if (!status.maia.available_ratings.includes(selectedRating)) {
-    return `Maia ${selectedRating} weights missing; auto mode will use Stockfish`;
+    return selectedOpponent === "maia"
+      ? `Club level ${selectedRating} is not downloaded`
+      : "Practice bot is ready";
   }
-  return `Maia ${selectedRating} is ready`;
+  return `Club level ${selectedRating} is ready`;
 }
 
 function lastMoveKeys(move: PlayMove): KeyPair | null {
@@ -756,6 +885,20 @@ function squareCenterPercent(
 
 function colorLabel(color: PlayColor): string {
   return color === "white" ? "White" : "Black";
+}
+
+function colorChoiceLabel(choice: PlayColorChoice): string {
+  if (choice === "random") return "Random";
+  return colorLabel(choice);
+}
+
+function colorChoiceToBoardColor(choice: PlayColorChoice): PlayColor {
+  return choice === "black" ? "black" : "white";
+}
+
+function resolveUserColor(choice: PlayColorChoice): PlayColor {
+  if (choice !== "random") return choice;
+  return Math.random() < 0.5 ? "white" : "black";
 }
 
 function squareKey(square: string): Key | null {

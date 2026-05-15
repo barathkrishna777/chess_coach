@@ -314,7 +314,7 @@ class PlayOpponentRegistry:
             info=OpponentInfo(
                 kind="maia",
                 requested=requested,
-                label=f"Maia {maia_rating}",
+                label=f"Club player ({maia_rating})",
                 engine="Lc0 Maia",
                 maia_rating=maia_rating,
                 fallback_reason=None,
@@ -363,4 +363,4 @@ def _env_int(name: str) -> int | None:
 
 
 def _stockfish_label(config: StockfishPlayConfig) -> str:
-    return f"Stockfish fallback ({config.elo} Elo)"
+    return f"Practice bot ({config.elo})"

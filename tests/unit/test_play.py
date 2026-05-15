@@ -116,7 +116,7 @@ def test_resign_as_black_records_result_and_headers() -> None:
     assert body["status"] == "resigned"
     assert body["result"] == "1-0"
     assert body["pgn"] is not None
-    assert '[White "Stockfish fallback"]' in body["pgn"]
+    assert '[White "Practice bot"]' in body["pgn"]
     assert '[Black "You"]' in body["pgn"]
     parsed = parse_pgn(body["pgn"])
     assert parsed.result == "1-0"
@@ -280,7 +280,7 @@ def test_resign_pgn_records_selected_opponent_headers() -> None:
 
     body = client.post("/api/play/resign", json={"game_id": game_id}).json()
 
-    assert '[Black "Stockfish fallback"]' in body["pgn"]
+    assert '[Black "Practice bot"]' in body["pgn"]
 
 
 class _FakeOpponent:
@@ -326,7 +326,7 @@ class _FakeRegistry:
             info=OpponentInfo(
                 kind="maia" if requested == "maia" else "stockfish",
                 requested=requested if requested in {"auto", "maia", "stockfish"} else "auto",
-                label=f"Maia {maia_rating}" if requested == "maia" else "Stockfish fallback",
+                label=f"Club player ({maia_rating})" if requested == "maia" else "Practice bot",
                 engine="Lc0 Maia" if requested == "maia" else "Stockfish",
                 maia_rating=maia_rating if requested == "maia" else None,
                 fallback_reason=None,
@@ -339,7 +339,7 @@ class _FakeRegistry:
             default_maia_rating=1500,
             stockfish_path="/opt/homebrew/bin/stockfish",
             stockfish_available=True,
-            stockfish_label="Stockfish fallback",
+            stockfish_label="Practice bot",
             maia=MaiaSetupStatus(
                 lc0_path="/opt/homebrew/bin/lc0",
                 lc0_available=True,
@@ -367,7 +367,7 @@ def _stockfish_info() -> OpponentInfo:
     return OpponentInfo(
         kind="stockfish",
         requested="stockfish",
-        label="Stockfish fallback",
+        label="Practice bot",
         engine="Stockfish",
         maia_rating=None,
         fallback_reason=None,
